@@ -1,5 +1,7 @@
 # Analyses of moth trends across 50 years in dependence of elevation
 
+[![DOI](https://zenodo.org/badge/904681792.svg)](https://doi.org/10.5281/zenodo.14506883)
+
 This repository contains codes and some data that were used in the analyses for the following manuscript:
 
 Neff F, Chittaro Y, Korner-Nievergelt F, Litsios G, Martínez-Núñez C, Rey E, Knop E. **Changes in moth communities across 50 years depend on elevation and species traits**
