@@ -10,7 +10,6 @@ library(brms)
 library(bayestestR)
 library(mgcv)
 library(cowplot)
-library(ggnewscale)
 library(ggh4x)
 library(openxlsx)
 
@@ -115,6 +114,167 @@ f_analysis_A_height <- function(formula, data_z, scalings, family, iter, seed,
                                   terms = terms, scalings = scalings,
                                   hours_sel = hours_sel)
   
+  
+  out
+}
+
+f_analysis_A_height_splev <- function(formula, data_z, scalings, family, iter, seed, 
+                                      hours_sel = NULL) {
+  
+  data_z <- droplevels(data_z)
+  
+  set.seed(seed)
+  
+  out <- list()
+  
+  response <- as.character(formula[2])
+  
+  
+  l_data <- make_standata(update(formula, ". ~ A * height + ."), 
+                          data = data_z)
+  
+  if (length(hours_sel) == 0){
+    hours_sel <- NULL
+  }
+  
+  if (!is.null(hours_sel)){
+    l_data_sub <- make_standata(update(formula, ". ~ s(active_hours)"),
+                                data = data_z[hours_sel, ])
+    
+    l_data$N_SEL <- length(hours_sel)
+    l_data$SEL <-  hours_sel
+    l_data$Xs_add <- l_data_sub$Xs
+    l_data$nb_add <- 1
+    l_data$knots_add <- l_data$knots_1
+    dimnames(l_data$knots_add)[[1]] <- "Zs_add_1"
+    l_data$Zs_add_1 <- l_data_sub$Zs_1_1
+  }
+  
+  
+  
+  if (!is.null(hours_sel)){
+    mod <- stan(file = "Stan_Code/Stan_nb_spline_s1p1_r4.stan",
+                data = l_data,
+                chains = 4, cores = 4,
+                iter = iter)
+  } else {
+    mod <- stan(file = "Stan_Code/Stan_nb_spline_s1_r4.stan",
+                data = l_data,
+                chains = 4, cores = 4,
+                iter = iter)
+  }
+  
+  
+  
+  # extract parameter data
+  par_names <- names(mod)
+  pos <- regexpr("\\[", par_names) 
+  pos <- ifelse(pos == -1, 200, pos - 1)
+  pars <- unique(substr(par_names, 1, pos))
+  pars <- pars[pars %in% c("b", "Intercept", "bs", "bs_add", "zs_1_1",
+                           "sds_1_1", "zs_2_1", "sds_2_1", "zs_add_1",
+                           "sds_add_1", "shape", "zi", "sd_1", "sd_2",
+                           "sd_3", "sd_4", "s_1_1", "s_2_1", "s_add_1")]
+  fit <- rstan::extract(mod, pars = pars)
+  d_coefs <- as.data.frame(fit$b)
+  
+  terms <- brmsterms(update(formula, ". ~ A * height + ."))
+  mm_full <- model.matrix(terms$dpars$mu$fe, data = data_z)[, -1]
+  
+  names(d_coefs) <- colnames(mm_full)
+  d_coefs <- d_coefs |> 
+    select(A, height, `A:height`) |> 
+    bind_cols(data.frame(Intercept = fit$Intercept))
+  out$d_coefs <- d_coefs
+  
+  
+  d_coefs_means <- apply(d_coefs, 2, function(x) ci(x) |> as.data.frame()) |> 
+    bind_rows(.id = "var") |>
+    bind_cols(mean = apply(d_coefs, 2, mean)) |> 
+    select(var, mean, CI_low, CI_high, CI)
+  out$d_coefs_means <- d_coefs_means
+  
+  out
+}
+
+f_analysis_A_site <- function(formula, data_z, scalings, family, iter, seed, 
+                              hours_sel = NULL) {
+  
+  set.seed(seed)
+  
+  out <- list()
+  
+  response <- as.character(formula[2])
+  
+  
+  l_data <- make_standata(update(formula, ". ~ A + ."), 
+                          data = data_z)
+  
+  if (!is.null(hours_sel)){
+    update(formula, . ~ s(active_hours, k = 10))
+    
+    l_data_sub <- tryCatch({make_standata(update(formula, ". ~ s(active_hours)"),
+                                          data = data_z[hours_sel, ])},
+                           error = function(e) "error")
+    
+    if (is.character(l_data_sub)){
+      hours_sel <- NULL
+      warning(paste("No hours active term for", LOC_i))
+    } else {
+      l_data$N_SEL <- length(hours_sel)
+      l_data$SEL <-  hours_sel
+      l_data$Xs_add <- l_data_sub$Xs
+      l_data$nb_add <- 1
+      l_data$knots_add <- l_data$knots_1
+      dimnames(l_data$knots_add)[[1]] <- "Zs_add_1"
+      l_data$Zs_add_1 <- l_data_sub$Zs_1_1
+    }
+  }
+  
+  if (family == "zero_inflated_negbinomial"){
+    if (!is.null(hours_sel)){
+      mod_lm <- stan(file = "Stan_Copde/Stan_nb_spline_s1p1_r1.stan",
+                     data = l_data,
+                     chains = 4, cores = 4,
+                     iter = iter)
+      
+    } else {
+      
+      mod_lm <- stan(file = "Stan_Copde/Stan_nb_spline_s1_r1.stan",
+                     data = l_data,
+                     chains = 4, cores = 4,
+                     iter = iter)
+      
+    }
+  } else if (family == "hurdle_gamma"){
+    if (!is.null(hours_sel)){
+      
+      mod_lm <- stan(file = "Stan_Copde/Stan_hg_spline_s1p1_r1.stan",
+                     data = l_data,
+                     chains = 4, cores = 4,
+                     iter = iter)
+      
+    } else {
+      
+      mod_lm <- stan(file = "Stan_Copde/Stan_hg_spline_s1_r1.stan",
+                     data = l_data,
+                     chains = 4, cores = 4,
+                     iter = iter)
+      
+    }
+  }
+  
+  # extract parameter data
+  par_names <- names(mod_lm)
+  pos <- regexpr("\\[", par_names) 
+  pos <- ifelse(pos == -1, 200, pos - 1)
+  pars <- unique(substr(par_names, 1, pos))
+  pars <- pars[pars %in% c("b", "Intercept", "bs", "bs_add", "zs_1_1",
+                           "sds_1_1", "zs_2_1", "sds_2_1", "zs_add_1",
+                           "sds_add_1", "shape", "zi", "sd_1", 
+                           "s_1_1", "s_2_1", "s_add_1")]
+  fit_lm <- rstan::extract(mod_lm, pars = pars)
+  out$fit_lm <- fit_lm
   
   out
 }
@@ -543,122 +703,6 @@ f_A_height_plot <- function(pred,
     labs(colour = "Elevation", x = "Year")
 }
 
-f_A_height_incr_decr <- function(fit, data, scalings, formula = NULL,
-                                    c_factors = c(1.1, 1.5, 2, 4)){
-  
-  
-  f_P_sum <- \(x, resolution = 1000){
-    
-    seq_neg <- seq(-0.9, -(1 - 1 / c_factors[1]), length.out = resolution)
-    seq_pos <-  (1 / (1+seq_neg)) - 1
-    
-    data.frame(threshold = seq_neg,
-               test = "decrease") |> 
-      rowwise() |> 
-      mutate(P_sum = mean(x <= threshold)) |> 
-      ungroup() |> 
-      bind_rows(data.frame(threshold = seq_pos,
-                           test = "increase") |> 
-                  rowwise() |> 
-                  mutate(P_sum = mean(x >= threshold)) |> 
-                  ungroup()) 
-    
-  }
-  
-  if (is.null(formula)){
-    formula <- response ~ A * height + s(yday) + P_2day + T_2day +
-      C(traptype, "contr.sum") +
-      C(bulbtype, "contr.sum") +
-      n_trap +
-      C(sample_previous, "contr.sum") +
-      (1 | spattemp_cluster) +
-      (1 | LOC) +
-      (1 | night_ID) +
-      (1 | trap_ID_A)
-  }
-  
-  terms <- brmsterms(formula)
-  mm_full <- model.matrix(terms$dpars$mu$fe, data = data)[, -1]
-  vars_i <- c("A", "height")
-  
-  d_pred <- data.frame()
-  for (var_i in vars_i){
-    
-    if (nrow(d_pred) == 0){
-      d_pred <-
-        data.frame(expl = seq(min(data[, var_i]), max(data[, var_i]),
-                              length.out = 3)) %>%
-        mutate(expl_c = expl - mean(data[, var_i, drop = T]),
-               expl_or = expl * scalings$sd[scalings$var == var_i] +
-                 scalings$mean[scalings$var == var_i]) %>% 
-        rename(!! sym(var_i) := expl,
-               !! sym(paste0(var_i, "_C")) := expl_c,
-               !! sym(paste0(var_i, "_OR")) := expl_or)
-    } else {
-      d_pred <- expand_grid(d_pred, 
-                            data.frame(expl = seq(min(data[, var_i]), max(data[, var_i]),
-                                                  length.out = 3)) %>% 
-                              mutate(expl_c = expl - mean(data[, var_i, drop = T]),
-                                     expl_or = expl * scalings$sd[scalings$var == var_i] +
-                                       scalings$mean[scalings$var == var_i]) %>% 
-                              rename(!! sym(var_i) := expl,
-                                     !! sym(paste0(var_i, "_C")) := expl_c,
-                                     !! sym(paste0(var_i, "_OR")) := expl_or))
-    }
-    
-  }
-  
-  
-  m_pred <- matrix(rep(fit$Intercept, each = nrow(d_pred)), nrow = nrow(d_pred))
-  
-  if (ncol(m_pred) < 4000) warning("Attention! Not 4 chains!")
-  
-  # add main effects
-  for (var_i in vars_i){
-    m_pred <- m_pred +
-      matrix(d_pred[, paste0(var_i, "_C"), drop = T]) %*% fit$b[, which(grepl(var_i, colnames(mm_full)) &
-                                                                          !grepl(":", colnames(mm_full)))]
-  }
-  
-  # add interactive effects
-  m_pred <- m_pred + 
-    matrix(d_pred %>% 
-             select(ends_with("_C")) %>% 
-             apply(., 1, prod)) %*% fit$b[, colnames(mm_full) == "A:height"]
-  
-  
-  d_pred <- cbind(d_pred, m_pred)
-  
-  d_pred |> 
-    filter(A_OR %in% c(min(A_OR), max(A_OR))) |> 
-    mutate_at(vars(!any_of(c("A", "A_C", "A_OR", "height", "height_C", "height_OR"))),
-              ~ exp(.)) |>
-    group_by(height_OR) |>
-    summarise_at(.vars = vars(!any_of(c("A", "A_C", "A_OR", "height", "height_C", "height_OR"))),
-                 ~ (.[A_OR == max(A_OR)] - .[A_OR == min(A_OR)]) / .[A_OR == min(A_OR)]) |> 
-    pivot_longer(-height_OR, names_to = "iter", values_to = "prop_change") |> 
-    mutate(height = ifelse(height_OR == max(height_OR),
-                           "max", ifelse(height_OR == min(height_OR),
-                                         "min", "median")),
-           height = factor(height, levels = c("min", "median", "max"),
-                           labels = c("Min. elevation", "Med. elevation", "Max. elevation"))) |> 
-    group_by(height) |> 
-    group_map(~ data.frame(f_P_sum(.$prop_change)) |> 
-                mutate(height = unique(.$height)), .keep = T) |> 
-    bind_rows() |> 
-    mutate(threshold_cut = cut(threshold, breaks = c(-Inf, rev(1/c_factors - 1), c_factors - 1, Inf)),
-           P_sum = ifelse(threshold_cut == "(-0.0909,0.1]", NA, P_sum)) |> 
-    # to have a line closing the curve on the right and left:
-    group_by(height) |> 
-    group_modify(~add_row(., threshold = -(1 - 1 / 1.1), test = "decrease", P_sum = 0)) |> 
-    group_modify(~add_row(., threshold = 0.1, test = "increase", P_sum = 0)) |>
-    ungroup() |> 
-    group_by(height, test) |> 
-    mutate(xwidth = (c(diff(threshold)[1], diff(threshold)) +
-                       c(diff(threshold), diff(threshold)[length(threshold)])) / 2) |> 
-    ungroup()
-}
-
 f_A_height_plot_comb <- function(l_pred,
                                  response = NULL,
                                  quantiles = c(0, .25, .5, .75, 1),
@@ -776,6 +820,39 @@ f_plot_pred <- function(x, data, response, hours_sel = NULL, line.size = 1){
   p
 }
 
+f_extract_slopes <- function(fit){
+  formula = SCcorr_ric ~
+    s(yday) + P_2day + T_2day +
+    C(traptype, "contr.sum") +
+    C(bulbtype, "contr.sum") +
+    n_trap +
+    C(sample_previous, "contr.sum") +
+    (1 | gr) + (1 | trap_ID) +
+    (1 | night_ID) +
+    (1 | trap_ID_A)
+  terms <- brmsterms(update(formula, ". ~ A * height + ."))
+  mm_full <- model.matrix(terms$dpars$mu$fe, data = d_mod_z)[, -1]
+  
+  d_coefs <- as.data.frame(fit$b)
+  
+  names(d_coefs) <- colnames(mm_full)
+  d_coefs <- d_coefs |> 
+    select(A, height, `A:height`) |> 
+    bind_cols(data.frame(Intercept = fit$Intercept))
+  
+  d_coefs
+}
+
+
+f_boot <- function(iter, dat) {
+  sel <- sample(1:nrow(dat), nrow(dat), replace = T)
+  out <- which(sort(dat$mean[sel]) > 0)[1] - .5
+  
+  out <- ifelse(is.na(out), nrow(dat) + .5, out)
+  
+  out
+}
+
 # RUN MODELS -------------------- ##############################################
 ################################################################################.
 
@@ -800,7 +877,7 @@ l_abu_A <- f_analysis_A_height(formula = abu_tot ~
                                iter = n_iter, seed = 126)
 
 # richness ---------------------------------------------------------------------.
-l_ric_A <- f_analysis_A_height(formula = sric ~
+l_ric_A <- f_analysis_A_height(formula = SCcorr_ric ~
                                  s(yday) + P_2day + T_2day +
                                  C(traptype, "contr.sum") +
                                  C(bulbtype, "contr.sum") +
@@ -811,7 +888,7 @@ l_ric_A <- f_analysis_A_height(formula = sric ~
                                  (1 | trap_ID_A),
                                data_z = d_mod_z,
                                scalings = filter(d_scalings, data == "full"),
-                               family = "zero_inflated_negbinomial",
+                               family = "hurdle_gamma",
                                hours_sel = which(d_mod_z$traptype == "p" & d_mod_z$hours_data),
                                iter = n_iter, seed = 8989)
 
@@ -886,7 +963,7 @@ l_abu_A_large <- f_analysis_A_height(formula = abu_tot ~
                                      iter = n_iter, seed = 97)
 
 # richness ---------------------------------------------------------------------.
-l_ric_A_small <- f_analysis_A_height(formula = sric ~
+l_ric_A_small <- f_analysis_A_height(formula = SCcorr_ric ~
                                        s(yday) + P_2day + T_2day +
                                        C(traptype, "contr.sum") +
                                        C(bulbtype, "contr.sum") +
@@ -898,11 +975,11 @@ l_ric_A_small <- f_analysis_A_height(formula = sric ~
                                        (1 | trap_ID_A),
                                      data_z = d_mod_mass_z %>% filter(mass_cat == "small"),
                                      scalings = filter(d_scalings, data == "full"),
-                                     family = "zero_inflated_negbinomial",
+                                     family = "hurdle_gamma",
                                      hours_sel = which(d_mod_mass_z$traptype[d_mod_mass_z$mass_cat == "small"] == "p" &
                                                          d_mod_mass_z$hours_data[d_mod_mass_z$mass_cat == "small"]),
                                      iter = n_iter, seed = 8460)
-l_ric_A_medium <- f_analysis_A_height(formula = sric ~
+l_ric_A_medium <- f_analysis_A_height(formula = SCcorr_ric ~
                                         s(yday) + P_2day + T_2day +
                                         C(traptype, "contr.sum") +
                                         C(bulbtype, "contr.sum") +
@@ -914,11 +991,11 @@ l_ric_A_medium <- f_analysis_A_height(formula = sric ~
                                         (1 | trap_ID_A),
                                       data_z = d_mod_mass_z %>% filter(mass_cat == "medium"),
                                       scalings = filter(d_scalings, data == "full"),
-                                      family = "zero_inflated_negbinomial",
+                                      family = "hurdle_gamma",
                                       hours_sel = which(d_mod_mass_z$traptype[d_mod_mass_z$mass_cat == "medium"] == "p" &
                                                           d_mod_mass_z$hours_data[d_mod_mass_z$mass_cat == "medium"]),
                                       iter = n_iter, seed = 510)
-l_ric_A_large <- f_analysis_A_height(formula = sric ~
+l_ric_A_large <- f_analysis_A_height(formula = SCcorr_ric ~
                                        s(yday) + P_2day + T_2day +
                                        C(traptype, "contr.sum") +
                                        C(bulbtype, "contr.sum") +
@@ -930,7 +1007,7 @@ l_ric_A_large <- f_analysis_A_height(formula = sric ~
                                        (1 | trap_ID_A),
                                      data_z = d_mod_mass_z %>% filter(mass_cat == "large"),
                                      scalings = filter(d_scalings, data == "full"),
-                                     family = "zero_inflated_negbinomial",
+                                     family = "hurdle_gamma",
                                      hours_sel = which(d_mod_mass_z$traptype[d_mod_mass_z$mass_cat == "large"] == "p" &
                                                          d_mod_mass_z$hours_data[d_mod_mass_z$mass_cat == "large"]),
                                      iter = n_iter, seed = 879)
@@ -1039,7 +1116,7 @@ l_abu_A_warm <- f_analysis_A_height(formula = abu_tot ~ height +
                                     iter = n_iter, seed = 1881)
 
 # richness ---------------------------------------------------------------------.
-l_ric_A_cold <- f_analysis_A_height(formula = sric ~
+l_ric_A_cold <- f_analysis_A_height(formula = SCcorr_ric ~
                                       s(yday) + P_2day + T_2day +
                                       C(traptype, "contr.sum") +
                                       C(bulbtype, "contr.sum") +
@@ -1051,11 +1128,11 @@ l_ric_A_cold <- f_analysis_A_height(formula = sric ~
                                       (1 | trap_ID_A),
                                     data_z = d_mod_Tavg_z %>% filter(Tavg_mean_cat == "cold"),
                                     scalings = filter(d_scalings, data == "full"),
-                                    family = "zero_inflated_negbinomial",
+                                    family = "hurdle_gamma",
                                     hours_sel = which(d_mod_Tavg_z$traptype[d_mod_Tavg_z$Tavg_mean_cat == "cold"] == "p" &
                                                         d_mod_Tavg_z$hours_data[d_mod_Tavg_z$Tavg_mean_cat == "cold"]),
                                     iter = n_iter, seed = 871)
-l_ric_A_intermediate <- f_analysis_A_height(formula = sric ~
+l_ric_A_intermediate <- f_analysis_A_height(formula = SCcorr_ric ~
                                               s(yday) + P_2day + T_2day +
                                               C(traptype, "contr.sum") +
                                               C(bulbtype, "contr.sum") +
@@ -1067,11 +1144,11 @@ l_ric_A_intermediate <- f_analysis_A_height(formula = sric ~
                                               (1 | trap_ID_A),
                                             data_z = d_mod_Tavg_z %>% filter(Tavg_mean_cat == "intermediate"),
                                             scalings = filter(d_scalings, data == "full"),
-                                            family = "zero_inflated_negbinomial",
+                                            family = "hurdle_gamma",
                                             hours_sel = which(d_mod_Tavg_z$traptype[d_mod_Tavg_z$Tavg_mean_cat == "intermediate"] == "p" &
                                                                 d_mod_Tavg_z$hours_data[d_mod_Tavg_z$Tavg_mean_cat == "intermediate"]),
                                             iter = n_iter, seed = 111)
-l_ric_A_warm <- f_analysis_A_height(formula = sric ~
+l_ric_A_warm <- f_analysis_A_height(formula = SCcorr_ric ~
                                       s(yday) + P_2day + T_2day +
                                       C(traptype, "contr.sum") +
                                       C(bulbtype, "contr.sum") +
@@ -1083,12 +1160,12 @@ l_ric_A_warm <- f_analysis_A_height(formula = sric ~
                                       (1 | trap_ID_A),
                                     data_z = d_mod_Tavg_z %>% filter(Tavg_mean_cat == "warm"),
                                     scalings = filter(d_scalings, data == "full"),
-                                    family = "zero_inflated_negbinomial",
+                                    family = "hurdle_gamma",
                                     hours_sel = which(d_mod_Tavg_z$traptype[d_mod_Tavg_z$Tavg_mean_cat == "warm"] == "p" &
                                                         d_mod_Tavg_z$hours_data[d_mod_Tavg_z$Tavg_mean_cat == "warm"]),
                                     iter = n_iter, seed = 901)
 
-# richness ---------------------------------------------------------------------.
+# biomass ----------------------------------------------------------------------.
 l_mass_A_cold <- f_analysis_A_height(formula = mass_tot ~  s(yday) + P_2day + T_2day +
                                        C(traptype, "contr.sum") +
                                        C(bulbtype, "contr.sum") +
@@ -1156,40 +1233,40 @@ l_abu_A_spec_m <- f_analysis_A_height(formula = abu_tot ~
                                                           d_mod_spec_z$hours_data[d_mod_spec_z$Spec == "Monophagous"]),
                                       iter = n_iter, seed = 346)
 # l_abu_A_spec_o <- f_analysis_A_height(formula = abu_tot ~
-                                        s(yday) + P_2day + T_2day +
-                                        C(traptype, "contr.sum") +
-                                        C(bulbtype, "contr.sum") +
-                                        n_trap +
-                                        C(sample_previous, "contr.sum") +
-                                        (1 | spattemp_cluster) +
-                                        (1 | LOC) +
-                                        (1 | night_ID) +
-                                        (1 | trap_ID_A),
-                                      data_z = d_mod_spec_z %>% filter(Spec == "Oligophagous"),
-                                      scalings = filter(d_scalings, data == "full"),
-                                      family = "zero_inflated_negbinomial",
-                                      hours_sel = which(d_mod_spec_z$traptype[d_mod_spec_z$Spec == "Oligophagous"] == "p" &
-                                                          d_mod_spec_z$hours_data[d_mod_spec_z$Spec == "Oligophagous"]),
-                                      iter = n_iter, seed = 665)
+s(yday) + P_2day + T_2day +
+  C(traptype, "contr.sum") +
+  C(bulbtype, "contr.sum") +
+  n_trap +
+  C(sample_previous, "contr.sum") +
+  (1 | spattemp_cluster) +
+  (1 | LOC) +
+  (1 | night_ID) +
+  (1 | trap_ID_A),
+data_z = d_mod_spec_z %>% filter(Spec == "Oligophagous"),
+scalings = filter(d_scalings, data == "full"),
+family = "zero_inflated_negbinomial",
+hours_sel = which(d_mod_spec_z$traptype[d_mod_spec_z$Spec == "Oligophagous"] == "p" &
+                    d_mod_spec_z$hours_data[d_mod_spec_z$Spec == "Oligophagous"]),
+iter = n_iter, seed = 665)
 # l_abu_A_spec_p <- f_analysis_A_height(formula = abu_tot ~
-                                        s(yday) + P_2day + T_2day +
-                                        C(traptype, "contr.sum") +
-                                        C(bulbtype, "contr.sum") +
-                                        n_trap +
-                                        C(sample_previous, "contr.sum") +
-                                        (1 | spattemp_cluster) +
-                                        (1 | LOC) +
-                                        (1 | night_ID) +
-                                        (1 | trap_ID_A),
-                                      data_z = d_mod_spec_z %>% filter(Spec == "Polyphagous"),
-                                      scalings = filter(d_scalings, data == "full"),
-                                      family = "zero_inflated_negbinomial",
-                                      hours_sel = which(d_mod_spec_z$traptype[d_mod_spec_z$Spec == "Polyphagous"] == "p" &
-                                                          d_mod_spec_z$hours_data[d_mod_spec_z$Spec == "Polyphagous"]),
-                                      iter = n_iter, seed = 863)
+s(yday) + P_2day + T_2day +
+  C(traptype, "contr.sum") +
+  C(bulbtype, "contr.sum") +
+  n_trap +
+  C(sample_previous, "contr.sum") +
+  (1 | spattemp_cluster) +
+  (1 | LOC) +
+  (1 | night_ID) +
+  (1 | trap_ID_A),
+data_z = d_mod_spec_z %>% filter(Spec == "Polyphagous"),
+scalings = filter(d_scalings, data == "full"),
+family = "zero_inflated_negbinomial",
+hours_sel = which(d_mod_spec_z$traptype[d_mod_spec_z$Spec == "Polyphagous"] == "p" &
+                    d_mod_spec_z$hours_data[d_mod_spec_z$Spec == "Polyphagous"]),
+iter = n_iter, seed = 863)
 
 # richness ---------------------------------------------------------------------.
-l_ric_A_spec_m <- f_analysis_A_height(formula = sric ~
+l_ric_A_spec_m <- f_analysis_A_height(formula = SCcorr_ric ~
                                         s(yday) + P_2day + T_2day +
                                         C(traptype, "contr.sum") +
                                         C(bulbtype, "contr.sum") +
@@ -1201,11 +1278,11 @@ l_ric_A_spec_m <- f_analysis_A_height(formula = sric ~
                                         (1 | trap_ID_A),
                                       data_z = d_mod_spec_z %>% filter(Spec == "Monophagous"),
                                       scalings = filter(d_scalings, data == "full"),
-                                      family = "zero_inflated_negbinomial",
+                                      family = "hurdle_gamma",
                                       hours_sel = which(d_mod_spec_z$traptype[d_mod_spec_z$Spec == "Monophagous"] == "p" &
                                                           d_mod_spec_z$hours_data[d_mod_spec_z$Spec == "Monophagous"]),
                                       iter = n_iter, seed = 8132)
-l_ric_A_spec_o <- f_analysis_A_height(formula = sric ~
+l_ric_A_spec_o <- f_analysis_A_height(formula = SCcorr_ric ~
                                         s(yday) + P_2day + T_2day +
                                         C(traptype, "contr.sum") +
                                         C(bulbtype, "contr.sum") +
@@ -1217,11 +1294,11 @@ l_ric_A_spec_o <- f_analysis_A_height(formula = sric ~
                                         (1 | trap_ID_A),
                                       data_z = d_mod_spec_z %>% filter(Spec == "Oligophagous"),
                                       scalings = filter(d_scalings, data == "full"),
-                                      family = "zero_inflated_negbinomial",
+                                      family = "hurdle_gamma",
                                       hours_sel = which(d_mod_spec_z$traptype[d_mod_spec_z$Spec == "Oligophagous"] == "p" &
                                                           d_mod_spec_z$hours_data[d_mod_spec_z$Spec == "Oligophagous"]),
                                       iter = n_iter, seed = 551)
-l_ric_A_spec_p <- f_analysis_A_height(formula = sric ~
+l_ric_A_spec_p <- f_analysis_A_height(formula = SCcorr_ric ~
                                         s(yday) + P_2day + T_2day +
                                         C(traptype, "contr.sum") +
                                         C(bulbtype, "contr.sum") +
@@ -1233,7 +1310,7 @@ l_ric_A_spec_p <- f_analysis_A_height(formula = sric ~
                                         (1 | trap_ID_A),
                                       data_z = d_mod_spec_z %>% filter(Spec == "Polyphagous"),
                                       scalings = filter(d_scalings, data == "full"),
-                                      family = "zero_inflated_negbinomial",
+                                      family = "hurdle_gamma",
                                       hours_sel = which(d_mod_spec_z$traptype[d_mod_spec_z$Spec == "Polyphagous"] == "p" &
                                                           d_mod_spec_z$hours_data[d_mod_spec_z$Spec == "Polyphagous"]),
                                       iter = n_iter, seed = 918)
@@ -1293,37 +1370,37 @@ l_mass_A_spec_p <- f_analysis_A_height(formula = mass_tot ~
 
 # abundance --------------------------------------------------------------------.
 l_abu_A_egg <- f_analysis_A_height(formula = abu_tot ~
-                                      s(yday) + P_2day + T_2day +
-                                      C(traptype, "contr.sum") +
-                                      C(bulbtype, "contr.sum") +
-                                      n_trap +
-                                      C(sample_previous, "contr.sum") +
-                                      (1 | spattemp_cluster) +
-                                      (1 | LOC) +
-                                      (1 | night_ID) +
-                                      (1 | trap_ID_A),
-                                    data_z = d_mod_hib_z %>% filter(overwintering_stage == "egg"),
-                                    scalings = filter(d_scalings, data == "full"),
-                                    family = "zero_inflated_negbinomial",
-                                    hours_sel = which(d_mod_hib_z$traptype[d_mod_hib_z$overwintering_stage == "egg"] == "p" &
-                                                        d_mod_hib_z$hours_data[d_mod_hib_z$overwintering_stage == "egg"]),
-                                    iter = n_iter, seed = 121)
+                                     s(yday) + P_2day + T_2day +
+                                     C(traptype, "contr.sum") +
+                                     C(bulbtype, "contr.sum") +
+                                     n_trap +
+                                     C(sample_previous, "contr.sum") +
+                                     (1 | spattemp_cluster) +
+                                     (1 | LOC) +
+                                     (1 | night_ID) +
+                                     (1 | trap_ID_A),
+                                   data_z = d_mod_hib_z %>% filter(overwintering_stage == "egg"),
+                                   scalings = filter(d_scalings, data == "full"),
+                                   family = "zero_inflated_negbinomial",
+                                   hours_sel = which(d_mod_hib_z$traptype[d_mod_hib_z$overwintering_stage == "egg"] == "p" &
+                                                       d_mod_hib_z$hours_data[d_mod_hib_z$overwintering_stage == "egg"]),
+                                   iter = n_iter, seed = 121)
 l_abu_A_larva <- f_analysis_A_height(formula = abu_tot ~
-                                      s(yday) + P_2day + T_2day +
-                                      C(traptype, "contr.sum") +
-                                      C(bulbtype, "contr.sum") +
-                                      n_trap +
-                                      C(sample_previous, "contr.sum") +
-                                      (1 | spattemp_cluster) +
-                                      (1 | LOC) +
-                                      (1 | night_ID) +
-                                      (1 | trap_ID_A),
-                                    data_z = d_mod_hib_z %>% filter(overwintering_stage == "larva"),
-                                    scalings = filter(d_scalings, data == "full"),
-                                    family = "zero_inflated_negbinomial",
-                                    hours_sel = which(d_mod_hib_z$traptype[d_mod_hib_z$overwintering_stage == "larva"] == "p" &
-                                                        d_mod_hib_z$hours_data[d_mod_hib_z$overwintering_stage == "larva"]),
-                                    iter = n_iter, seed = 442)
+                                       s(yday) + P_2day + T_2day +
+                                       C(traptype, "contr.sum") +
+                                       C(bulbtype, "contr.sum") +
+                                       n_trap +
+                                       C(sample_previous, "contr.sum") +
+                                       (1 | spattemp_cluster) +
+                                       (1 | LOC) +
+                                       (1 | night_ID) +
+                                       (1 | trap_ID_A),
+                                     data_z = d_mod_hib_z %>% filter(overwintering_stage == "larva"),
+                                     scalings = filter(d_scalings, data == "full"),
+                                     family = "zero_inflated_negbinomial",
+                                     hours_sel = which(d_mod_hib_z$traptype[d_mod_hib_z$overwintering_stage == "larva"] == "p" &
+                                                         d_mod_hib_z$hours_data[d_mod_hib_z$overwintering_stage == "larva"]),
+                                     iter = n_iter, seed = 442)
 l_abu_A_pupa <- f_analysis_A_height(formula = abu_tot ~
                                       s(yday) + P_2day + T_2day +
                                       C(traptype, "contr.sum") +
@@ -1341,56 +1418,56 @@ l_abu_A_pupa <- f_analysis_A_height(formula = abu_tot ~
                                                         d_mod_hib_z$hours_data[d_mod_hib_z$overwintering_stage == "pupa"]),
                                     iter = n_iter, seed = 9877)
 l_abu_A_adult <- f_analysis_A_height(formula = abu_tot ~
-                                      s(yday) + P_2day + T_2day +
-                                      C(traptype, "contr.sum") +
-                                      C(bulbtype, "contr.sum") +
-                                      n_trap +
-                                      C(sample_previous, "contr.sum") +
-                                      (1 | spattemp_cluster) +
-                                      (1 | LOC) +
-                                      (1 | night_ID) +
-                                      (1 | trap_ID_A),
-                                    data_z = d_mod_hib_z %>% filter(overwintering_stage == "adult"),
-                                    scalings = filter(d_scalings, data == "full"),
-                                    family = "zero_inflated_negbinomial",
-                                    hours_sel = which(d_mod_hib_z$traptype[d_mod_hib_z$overwintering_stage == "adult"] == "p" &
-                                                        d_mod_hib_z$hours_data[d_mod_hib_z$overwintering_stage == "adult"]),
-                                    iter = n_iter, seed = 2111)
+                                       s(yday) + P_2day + T_2day +
+                                       C(traptype, "contr.sum") +
+                                       C(bulbtype, "contr.sum") +
+                                       n_trap +
+                                       C(sample_previous, "contr.sum") +
+                                       (1 | spattemp_cluster) +
+                                       (1 | LOC) +
+                                       (1 | night_ID) +
+                                       (1 | trap_ID_A),
+                                     data_z = d_mod_hib_z %>% filter(overwintering_stage == "adult"),
+                                     scalings = filter(d_scalings, data == "full"),
+                                     family = "zero_inflated_negbinomial",
+                                     hours_sel = which(d_mod_hib_z$traptype[d_mod_hib_z$overwintering_stage == "adult"] == "p" &
+                                                         d_mod_hib_z$hours_data[d_mod_hib_z$overwintering_stage == "adult"]),
+                                     iter = n_iter, seed = 2111)
 
 # richness ---------------------------------------------------------------------.
-l_ric_A_egg <- f_analysis_A_height(formula = sric ~
-                                      s(yday) + P_2day + T_2day +
-                                      C(traptype, "contr.sum") +
-                                      C(bulbtype, "contr.sum") +
-                                      n_trap +
-                                      C(sample_previous, "contr.sum") +
-                                      (1 | spattemp_cluster) +
-                                      (1 | LOC) +
-                                      (1 | night_ID) +
-                                      (1 | trap_ID_A),
-                                    data_z = d_mod_hib_z %>% filter(overwintering_stage == "egg"),
-                                    scalings = filter(d_scalings, data == "full"),
-                                    family = "zero_inflated_negbinomial",
-                                    hours_sel = which(d_mod_hib_z$traptype[d_mod_hib_z$overwintering_stage == "egg"] == "p" &
-                                                        d_mod_hib_z$hours_data[d_mod_hib_z$overwintering_stage == "egg"]),
-                                    iter = n_iter, seed = 12)
-l_ric_A_larva <- f_analysis_A_height(formula = sric ~
-                                      s(yday) + P_2day + T_2day +
-                                      C(traptype, "contr.sum") +
-                                      C(bulbtype, "contr.sum") +
-                                      n_trap +
-                                      C(sample_previous, "contr.sum") +
-                                      (1 | spattemp_cluster) +
-                                      (1 | LOC) +
-                                      (1 | night_ID) +
-                                      (1 | trap_ID_A),
-                                    data_z = d_mod_hib_z %>% filter(overwintering_stage == "larva"),
-                                    scalings = filter(d_scalings, data == "full"),
-                                    family = "zero_inflated_negbinomial",
-                                    hours_sel = which(d_mod_hib_z$traptype[d_mod_hib_z$overwintering_stage == "larva"] == "p" &
-                                                        d_mod_hib_z$hours_data[d_mod_hib_z$overwintering_stage == "larva"]),
-                                    iter = n_iter, seed = 8797)
-l_ric_A_pupa <- f_analysis_A_height(formula = sric ~
+l_ric_A_egg <- f_analysis_A_height(formula = SCcorr_ric ~
+                                     s(yday) + P_2day + T_2day +
+                                     C(traptype, "contr.sum") +
+                                     C(bulbtype, "contr.sum") +
+                                     n_trap +
+                                     C(sample_previous, "contr.sum") +
+                                     (1 | spattemp_cluster) +
+                                     (1 | LOC) +
+                                     (1 | night_ID) +
+                                     (1 | trap_ID_A),
+                                   data_z = d_mod_hib_z %>% filter(overwintering_stage == "egg"),
+                                   scalings = filter(d_scalings, data == "full"),
+                                   family = "hurdle_gamma",
+                                   hours_sel = which(d_mod_hib_z$traptype[d_mod_hib_z$overwintering_stage == "egg"] == "p" &
+                                                       d_mod_hib_z$hours_data[d_mod_hib_z$overwintering_stage == "egg"]),
+                                   iter = n_iter, seed = 12)
+l_ric_A_larva <- f_analysis_A_height(formula = SCcorr_ric ~
+                                       s(yday) + P_2day + T_2day +
+                                       C(traptype, "contr.sum") +
+                                       C(bulbtype, "contr.sum") +
+                                       n_trap +
+                                       C(sample_previous, "contr.sum") +
+                                       (1 | spattemp_cluster) +
+                                       (1 | LOC) +
+                                       (1 | night_ID) +
+                                       (1 | trap_ID_A),
+                                     data_z = d_mod_hib_z %>% filter(overwintering_stage == "larva"),
+                                     scalings = filter(d_scalings, data == "full"),
+                                     family = "hurdle_gamma",
+                                     hours_sel = which(d_mod_hib_z$traptype[d_mod_hib_z$overwintering_stage == "larva"] == "p" &
+                                                         d_mod_hib_z$hours_data[d_mod_hib_z$overwintering_stage == "larva"]),
+                                     iter = n_iter, seed = 8797)
+l_ric_A_pupa <- f_analysis_A_height(formula = SCcorr_ric ~
                                       s(yday) + P_2day + T_2day +
                                       C(traptype, "contr.sum") +
                                       C(bulbtype, "contr.sum") +
@@ -1402,26 +1479,26 @@ l_ric_A_pupa <- f_analysis_A_height(formula = sric ~
                                       (1 | trap_ID_A),
                                     data_z = d_mod_hib_z %>% filter(overwintering_stage == "pupa"),
                                     scalings = filter(d_scalings, data == "full"),
-                                    family = "zero_inflated_negbinomial",
+                                    family = "hurdle_gamma",
                                     hours_sel = which(d_mod_hib_z$traptype[d_mod_hib_z$overwintering_stage == "pupa"] == "p" &
                                                         d_mod_hib_z$hours_data[d_mod_hib_z$overwintering_stage == "pupa"]),
                                     iter = n_iter, seed = 194)
-l_ric_A_adult <- f_analysis_A_height(formula = sric ~
-                                      s(yday) + P_2day + T_2day +
-                                      C(traptype, "contr.sum") +
-                                      C(bulbtype, "contr.sum") +
-                                      n_trap +
-                                      C(sample_previous, "contr.sum") +
-                                      (1 | spattemp_cluster) +
-                                      (1 | LOC) +
-                                      (1 | night_ID) +
-                                      (1 | trap_ID_A),
-                                    data_z = d_mod_hib_z %>% filter(overwintering_stage == "adult"),
-                                    scalings = filter(d_scalings, data == "full"),
-                                    family = "zero_inflated_negbinomial",
-                                    hours_sel = which(d_mod_hib_z$traptype[d_mod_hib_z$overwintering_stage == "adult"] == "p" &
-                                                        d_mod_hib_z$hours_data[d_mod_hib_z$overwintering_stage == "adult"]),
-                                    iter = n_iter, seed = 654)
+l_ric_A_adult <- f_analysis_A_height(formula = SCcorr_ric ~
+                                       s(yday) + P_2day + T_2day +
+                                       C(traptype, "contr.sum") +
+                                       C(bulbtype, "contr.sum") +
+                                       n_trap +
+                                       C(sample_previous, "contr.sum") +
+                                       (1 | spattemp_cluster) +
+                                       (1 | LOC) +
+                                       (1 | night_ID) +
+                                       (1 | trap_ID_A),
+                                     data_z = d_mod_hib_z %>% filter(overwintering_stage == "adult"),
+                                     scalings = filter(d_scalings, data == "full"),
+                                     family = "hurdle_gamma",
+                                     hours_sel = which(d_mod_hib_z$traptype[d_mod_hib_z$overwintering_stage == "adult"] == "p" &
+                                                         d_mod_hib_z$hours_data[d_mod_hib_z$overwintering_stage == "adult"]),
+                                     iter = n_iter, seed = 654)
 
 # biomass ----------------------------------------------------------------------.
 l_mass_A_egg <- f_analysis_A_height(formula = mass_tot ~
@@ -1441,53 +1518,53 @@ l_mass_A_egg <- f_analysis_A_height(formula = mass_tot ~
                                                         d_mod_hib_z$hours_data[d_mod_hib_z$overwintering_stage == "egg"]),
                                     iter = n_iter, seed = 537)
 l_mass_A_larva <- f_analysis_A_height(formula = mass_tot ~
-                                      s(yday) + P_2day + T_2day +
-                                      C(traptype, "contr.sum") +
-                                      C(bulbtype, "contr.sum") +
-                                      n_trap +
-                                      C(sample_previous, "contr.sum") +
-                                      (1 | spattemp_cluster) +
-                                      (1 | LOC) +
-                                      (1 | night_ID) +
-                                      (1 | trap_ID_A),
-                                    data_z = d_mod_hib_z %>% filter(overwintering_stage == "larva"),
-                                    scalings = filter(d_scalings, data == "full"),
-                                    family = "hurdle_gamma",
-                                    hours_sel = which(d_mod_hib_z$traptype[d_mod_hib_z$overwintering_stage == "larva"] == "p" &
-                                                        d_mod_hib_z$hours_data[d_mod_hib_z$overwintering_stage == "larva"]),
-                                    iter = n_iter, seed = 634)
+                                        s(yday) + P_2day + T_2day +
+                                        C(traptype, "contr.sum") +
+                                        C(bulbtype, "contr.sum") +
+                                        n_trap +
+                                        C(sample_previous, "contr.sum") +
+                                        (1 | spattemp_cluster) +
+                                        (1 | LOC) +
+                                        (1 | night_ID) +
+                                        (1 | trap_ID_A),
+                                      data_z = d_mod_hib_z %>% filter(overwintering_stage == "larva"),
+                                      scalings = filter(d_scalings, data == "full"),
+                                      family = "hurdle_gamma",
+                                      hours_sel = which(d_mod_hib_z$traptype[d_mod_hib_z$overwintering_stage == "larva"] == "p" &
+                                                          d_mod_hib_z$hours_data[d_mod_hib_z$overwintering_stage == "larva"]),
+                                      iter = n_iter, seed = 634)
 l_mass_A_pupa <- f_analysis_A_height(formula = mass_tot ~
-                                      s(yday) + P_2day + T_2day +
-                                      C(traptype, "contr.sum") +
-                                      C(bulbtype, "contr.sum") +
-                                      n_trap +
-                                      C(sample_previous, "contr.sum") +
-                                      (1 | spattemp_cluster) +
-                                      (1 | LOC) +
-                                      (1 | night_ID) +
-                                      (1 | trap_ID_A),
-                                    data_z = d_mod_hib_z %>% filter(overwintering_stage == "pupa"),
-                                    scalings = filter(d_scalings, data == "full"),
-                                    family = "hurdle_gamma",
-                                    hours_sel = which(d_mod_hib_z$traptype[d_mod_hib_z$overwintering_stage == "pupa"] == "p" &
-                                                        d_mod_hib_z$hours_data[d_mod_hib_z$overwintering_stage == "pupa"]),
-                                    iter = n_iter, seed = 19)
+                                       s(yday) + P_2day + T_2day +
+                                       C(traptype, "contr.sum") +
+                                       C(bulbtype, "contr.sum") +
+                                       n_trap +
+                                       C(sample_previous, "contr.sum") +
+                                       (1 | spattemp_cluster) +
+                                       (1 | LOC) +
+                                       (1 | night_ID) +
+                                       (1 | trap_ID_A),
+                                     data_z = d_mod_hib_z %>% filter(overwintering_stage == "pupa"),
+                                     scalings = filter(d_scalings, data == "full"),
+                                     family = "hurdle_gamma",
+                                     hours_sel = which(d_mod_hib_z$traptype[d_mod_hib_z$overwintering_stage == "pupa"] == "p" &
+                                                         d_mod_hib_z$hours_data[d_mod_hib_z$overwintering_stage == "pupa"]),
+                                     iter = n_iter, seed = 19)
 l_mass_A_adult <- f_analysis_A_height(formula = mass_tot ~
-                                      s(yday) + P_2day + T_2day +
-                                      C(traptype, "contr.sum") +
-                                      C(bulbtype, "contr.sum") +
-                                      n_trap +
-                                      C(sample_previous, "contr.sum") +
-                                      (1 | spattemp_cluster) +
-                                      (1 | LOC) +
-                                      (1 | night_ID) +
-                                      (1 | trap_ID_A),
-                                    data_z = d_mod_hib_z %>% filter(overwintering_stage == "adult"),
-                                    scalings = filter(d_scalings, data == "full"),
-                                    family = "hurdle_gamma",
-                                    hours_sel = which(d_mod_hib_z$traptype[d_mod_hib_z$overwintering_stage == "adult"] == "p" &
-                                                        d_mod_hib_z$hours_data[d_mod_hib_z$overwintering_stage == "adult"]),
-                                    iter = n_iter, seed = 944)
+                                        s(yday) + P_2day + T_2day +
+                                        C(traptype, "contr.sum") +
+                                        C(bulbtype, "contr.sum") +
+                                        n_trap +
+                                        C(sample_previous, "contr.sum") +
+                                        (1 | spattemp_cluster) +
+                                        (1 | LOC) +
+                                        (1 | night_ID) +
+                                        (1 | trap_ID_A),
+                                      data_z = d_mod_hib_z %>% filter(overwintering_stage == "adult"),
+                                      scalings = filter(d_scalings, data == "full"),
+                                      family = "hurdle_gamma",
+                                      hours_sel = which(d_mod_hib_z$traptype[d_mod_hib_z$overwintering_stage == "adult"] == "p" &
+                                                          d_mod_hib_z$hours_data[d_mod_hib_z$overwintering_stage == "adult"]),
+                                      iter = n_iter, seed = 944)
 
 # ... sensitivity analyses #####################################################
 ################################################################################.
@@ -1546,7 +1623,7 @@ l_abu_A_p <- f_analysis_A_height(formula = abu_tot ~
 # richness ---------------------------------------------------------------------.
 
 # full observation hours data:
-l_ric_A_ne <- f_analysis_A_height(formula = sric ~
+l_ric_A_ne <- f_analysis_A_height(formula = SCcorr_ric ~
                                     s(yday) + P_2day + T_2day +
                                     C(traptype, "contr.sum") +
                                     C(bulbtype, "contr.sum") +
@@ -1558,11 +1635,11 @@ l_ric_A_ne <- f_analysis_A_height(formula = sric ~
                                     (1 | trap_ID_A),
                                   data_z = d_mod_ne_z,
                                   scalings = filter(d_scalings, data == "no_estimates"),
-                                  family = "zero_inflated_negbinomial",
+                                  family = "hurdle_gamma",
                                   hours_sel = which(d_mod_ne_z$traptype == "p"),
                                   iter = n_iter, seed = 1211)
 # fixed traps only:
-l_ric_A_lf <- f_analysis_A_height(formula = sric ~
+l_ric_A_lf <- f_analysis_A_height(formula = SCcorr_ric ~
                                     s(yday) + P_2day + T_2day +
                                     C(traptype, "contr.sum") +
                                     C(bulbtype, "contr.sum") +
@@ -1572,10 +1649,10 @@ l_ric_A_lf <- f_analysis_A_height(formula = sric ~
                                     (1 | trap_ID_A),
                                   data_z = d_mod_lf_z,
                                   scalings = filter(d_scalings, data == "LF"),
-                                  family = "zero_inflated_negbinomial",
+                                  family = "hurdle_gamma",
                                   iter = n_iter, seed = 45461)
 # manual traps only:
-l_ric_A_p <- f_analysis_A_height(formula = sric ~
+l_ric_A_p <- f_analysis_A_height(formula = SCcorr_ric ~
                                    s(yday) + P_2day + T_2day +
                                    C(bulbtype, "contr.sum") +
                                    n_trap +
@@ -1585,7 +1662,7 @@ l_ric_A_p <- f_analysis_A_height(formula = sric ~
                                    (1 | trap_ID_A),
                                  data_z = d_mod_p_z,
                                  scalings = filter(d_scalings, data == "p"),
-                                 family = "zero_inflated_negbinomial",
+                                 family = "hurdle_gamma",
                                  hours_sel = which(d_mod_p_z$hours_data),
                                  iter = n_iter, seed = 6894)
 
@@ -1639,6 +1716,211 @@ l_mass_A_p <- f_analysis_A_height(formula = mass_tot ~
                                   hours_sel = which(d_mod_p_z$hours_data),
                                   iter = n_iter, seed = 6894)
 
+# ... single-site models #######################################################
+################################################################################.
+
+d_LOC_sel <- d_mod |> 
+  group_by(LOC) |> 
+  summarise(n_years = n_distinct(A),
+            n_obs = n(),
+            .groups = "drop") |> 
+  filter(n_years >= 4,
+         n_obs >= 10) 
+
+
+# abundance --------------------------------------------------------------------.
+
+d_slope_A_abu <- data.frame()
+for (LOC_i in d_LOC_sel$LOC){
+  d_mod_z_i <- d_mod_z |> filter(LOC == LOC_i) |> droplevels()
+  
+  formula_i <- abu_tot ~
+    s(yday) + P_2day + T_2day +
+    (1 | A_id)
+  
+  if (nlevels(d_mod_z_i$traptype) > 1)  {
+    formula_i <- update(formula_i, . ~ . + C(traptype, "contr.sum"))
+  }
+  if (nlevels(d_mod_z_i$bulbtype) > 1)  {
+    formula_i <- update(formula_i, . ~ . + C(bulbtype, "contr.sum"))
+  }
+  if (nlevels(d_mod_z_i$n_trap) > 1)  {
+    formula_i <- update(formula_i, . ~ . + n_trap)
+  }
+  if (nlevels(d_mod_z_i$sample_previous) > 1)  {
+    formula_i <- update(formula_i, . ~ . + C(sample_previous, "contr.sum"))
+  }
+  
+  hours_sel_i <- which(d_mod_z_i$traptype == "p" & !d_mod_z_i$estimate)
+  
+  if (length(hours_sel_i) == 0) hours_sel_i <- NULL
+  
+  l_abu_A_i <- f_analysis_A_site(formula = formula_i,
+                                 data_z = d_mod_z_i,
+                                 scalings = filter(d_scalings, data == "full"),
+                                 family = "zero_inflated_negbinomial",
+                                 hours_sel = hours_sel_i,
+                                 iter = n_iter, seed = 126)
+  
+  
+  terms <- brmsterms(update(formula_i, ". ~ A + ."))
+  mm_fe <- model.matrix(terms$dpars$mu$fe, data = d_mod_z_i)[, -1]
+  
+  c_slope_A_abu_i <- l_abu_A_i$fit_lm$b[, which(colnames(mm_fe) == "A"), drop = T]
+  
+  d_slope_A_abu <- data.frame(LOC = LOC_i, slope = c_slope_A_abu_i, iter = seq_len(length(c_slope_A_abu_i))) |> 
+    bind_rows(d_slope_A_abu)
+}
+
+# richness ---------------------------------------------------------------------.
+
+d_slope_A_SCcr <- data.frame()
+for (LOC_i in d_LOC_sel$LOC){
+  d_mod_z_i <- d_mod_z |> filter(LOC == LOC_i) |> droplevels()
+  
+  formula_i <- SCcorr_ric ~
+    s(yday) + P_2day + T_2day +
+    (1 | A_id)
+  
+  if (nlevels(d_mod_z_i$traptype) > 1)  {
+    formula_i <- update(formula_i, . ~ . + C(traptype, "contr.sum"))
+  }
+  if (nlevels(d_mod_z_i$bulbtype) > 1)  {
+    formula_i <- update(formula_i, . ~ . + C(bulbtype, "contr.sum"))
+  }
+  if (nlevels(d_mod_z_i$n_trap) > 1)  {
+    formula_i <- update(formula_i, . ~ . + n_trap)
+  }
+  if (nlevels(d_mod_z_i$sample_previous) > 1)  {
+    formula_i <- update(formula_i, . ~ . + C(sample_previous, "contr.sum"))
+  }
+  
+  hours_sel_i <- which(d_mod_z_i$traptype == "p" & !d_mod_z_i$estimate)
+  
+  if (length(hours_sel_i) == 0) hours_sel_i <- NULL
+  
+  l_SCcr_A_i <- f_analysis_A_site(formula = formula_i,
+                                  data_z = d_mod_z_i,
+                                  scalings = filter(d_scalings, data == "full"),
+                                  family = "hurdle_gamma",
+                                  hours_sel = hours_sel_i,
+                                  iter = n_iter, seed = 126)
+  
+  
+  terms <- brmsterms(update(formula_i, ". ~ A + ."))
+  mm_fe <- model.matrix(terms$dpars$mu$fe, data = d_mod_z_i)[, -1]
+  
+  c_slope_A_SCcr_i <- l_SCcr_A_i$fit_lm$b[, which(colnames(mm_fe) == "A"), drop = T]
+  
+  d_slope_A_SCcr <- data.frame(LOC = LOC_i, slope = c_slope_A_SCcr_i, iter = seq_len(length(c_slope_A_SCcr_i))) |> 
+    bind_rows(d_slope_A_SCcr)
+}
+
+
+# biomass ----------------------------------------------------------------------.
+
+d_slope_A_mass <- data.frame()
+for (LOC_i in d_LOC_sel$LOC){
+  d_mod_z_i <- d_mod_z |> filter(LOC == LOC_i) |> droplevels()
+  
+  formula_i <- mass_tot ~
+    s(yday) + P_2day + T_2day +
+    (1 | A_id)
+  
+  if (nlevels(d_mod_z_i$traptype) > 1)  {
+    formula_i <- update(formula_i, . ~ . + C(traptype, "contr.sum"))
+  }
+  if (nlevels(d_mod_z_i$bulbtype) > 1)  {
+    formula_i <- update(formula_i, . ~ . + C(bulbtype, "contr.sum"))
+  }
+  if (nlevels(d_mod_z_i$n_trap) > 1)  {
+    formula_i <- update(formula_i, . ~ . + n_trap)
+  }
+  if (nlevels(d_mod_z_i$sample_previous) > 1)  {
+    formula_i <- update(formula_i, . ~ . + C(sample_previous, "contr.sum"))
+  }
+  
+  hours_sel_i <- which(d_mod_z_i$traptype == "p" & !d_mod_z_i$estimate)
+  
+  if (length(hours_sel_i) == 0) hours_sel_i <- NULL
+  
+  l_mass_A_i <- f_analysis_A_site(formula = formula_i,
+                                  data_z = d_mod_z_i,
+                                  scalings = filter(d_scalings, data == "full"),
+                                  family = "hurdle_gamma",
+                                  hours_sel = hours_sel_i,
+                                  iter = n_iter, seed = 126)
+  
+  
+  terms <- brmsterms(update(formula_i, ". ~ A + ."))
+  mm_fe <- model.matrix(terms$dpars$mu$fe, data = d_mod_z_i)[, -1]
+  
+  c_slope_A_mass_i <- l_mass_A_i$fit_lm$b[, which(colnames(mm_fe) == "A"), drop = T]
+  
+  d_slope_A_mass <- data.frame(LOC = LOC_i, slope = c_slope_A_mass_i, iter = seq_len(length(c_slope_A_mass_i))) |> 
+    bind_rows(d_slope_A_mass)
+}
+
+# ... single-species models ####################################################
+################################################################################.
+
+d_sel <- d_moths |> 
+  group_by(Name_std) |> 
+  summarise(n_comb = n_distinct(paste(LOC, A)),
+            .groups = "drop") |> 
+  filter(n_comb >= 100)
+
+for (sp_i in d_sel$Name_std){
+  
+  d_mod_i <- d_moths %>%
+    filter(Name_std == sp_i) |> 
+    group_by(LOC, visit_ID, A_id = A) %>%
+    summarise(abu = sum(individualCount),
+              .groups = "drop") |> 
+    full_join(d_mod_z |> select(-abu_tot),
+              by = join_by(LOC, visit_ID, A_id)) |>
+    mutate(abu = ifelse(is.na(abu), 0, abu))
+  
+  
+  out <- f_analysis_A_height_splev(formula = abu ~
+                                     s(yday) + P_2day + T_2day +
+                                     C(traptype, "contr.sum") +
+                                     C(bulbtype, "contr.sum") +
+                                     n_trap +
+                                     C(sample_previous, "contr.sum") +
+                                     (1 | gr) +
+                                     (1 | LOC) +
+                                     (1 | night_ID) +
+                                     (1 | trap_ID_A),
+                                   data_z = d_mod_i,
+                                   scalings = filter(d_scalings, data == "full"),
+                                   family = "zero_inflated_negbinomial",
+                                   hours_sel = which(d_mod_z$traptype == "p" & !d_mod_z$estimate),
+                                   iter = n_iter,
+                                   seed = sp_nr_i)
+  
+  out$d_coefs <- out$d_coefs |> 
+    mutate(Name_std = sp_i)
+  out$d_coefs_mean <- out$d_coefs_mean |> 
+    mutate(Name_std = sp_i)
+  
+  # save output temporarily
+  saveRDS(out, "Output/singlespecies/splev_", 
+          gsub(" |/", "_", sp_i), ".rds")
+}
+
+
+# create combined dataframes ---------------------------------------------------.
+
+files <- list.files("Output/singlespecies", full.names = T)
+
+d_coefs_mean <- lapply(files, function(x) readRDS(x)$d_coefs_mean) |>
+  bind_rows()
+
+set.seed(143)
+d_coefs_sim <- lapply(files, function(x) readRDS(x)$d_coefs[sample(1:4000, 5000, replace = T), c("A:height", "Name_std")]) |> 
+  bind_rows()
+
 
 # CREATE OUTPUTS -------------- ################################################
 ################################################################################.
@@ -1670,7 +1952,7 @@ f_A_height_change_numbers(l_abu_A$fit,
 
 f_A_height_change_numbers(l_ric_A$fit,
                           d_mod_z,
-                          brmsterms(update(sric ~ s(yday) + P_2day + T_2day + 
+                          brmsterms(update(SCcorr_ric ~ s(yday) + P_2day + T_2day + 
                                              C(traptype, "contr.sum") + 
                                              C(bulbtype, "contr.sum") + 
                                              n_trap + C(sample_previous, "contr.sum") + 
@@ -1799,7 +2081,7 @@ f_A_height_change_numbers(l_abu_A_cold$fit,
                             formatC(perc_upper, digits = 3, format = "fg", flag = "#"), "%)"))
 f_A_height_change_numbers(l_ric_A_cold$fit,
                           d_mod_z,
-                          brmsterms(update(sric ~ s(yday) + P_2day + T_2day + 
+                          brmsterms(update(SCcorr_ric ~ s(yday) + P_2day + T_2day + 
                                              C(traptype, "contr.sum") + 
                                              C(bulbtype, "contr.sum") + 
                                              n_trap + C(sample_previous, "contr.sum") + 
@@ -1862,7 +2144,7 @@ f_A_height_change_numbers(l_abu_A_spec_m$fit,
                             formatC(perc_upper, digits = 3, format = "fg", flag = "#"), "%)"))
 f_A_height_change_numbers(l_ric_A_spec_m$fit,
                           d_mod_z,
-                          brmsterms(update(sric ~ s(yday) + P_2day + T_2day + 
+                          brmsterms(update(SCcorr_ric ~ s(yday) + P_2day + T_2day + 
                                              C(traptype, "contr.sum") + 
                                              C(bulbtype, "contr.sum") + 
                                              n_trap + C(sample_previous, "contr.sum") + 
@@ -1946,7 +2228,7 @@ f_A_height_change_numbers(l_abu_A_pupa$fit,
                             formatC(perc_upper, digits = 3, format = "fg", flag = "#"), "%)"))
 f_A_height_change_numbers(l_ric_A_pupa$fit,
                           d_mod_z,
-                          brmsterms(update(sric ~ s(yday) + P_2day + T_2day + 
+                          brmsterms(update(SCcorr_ric ~ s(yday) + P_2day + T_2day + 
                                              C(traptype, "contr.sum") + 
                                              C(bulbtype, "contr.sum") + 
                                              n_trap + C(sample_previous, "contr.sum") + 
@@ -1986,6 +2268,96 @@ f_A_height_change_numbers(l_mass_A_pupa$fit,
                             "% (95%-CI: ", 
                             formatC(perc_lower, digits = 3, format = "fg", flag = "#"), "% to ", 
                             formatC(perc_upper, digits = 3, format = "fg", flag = "#"), "%)"))
+
+# single-species models --------------------------------------------------------.
+
+d_coefs_sim |> 
+  group_by(Name_std) |>
+  mutate(iter = row_number()) |>
+  ungroup() |>
+  group_by(iter) |> 
+  summarise(perc_pos = mean(`A:height` > 0) * 100,
+            .groups = "drop") |> 
+  summarise(perc_pos_m = mean(perc_pos),
+            perc_pos_lower = ci(perc_pos)$CI_low,
+            perc_pos_upper = ci(perc_pos)$CI_high) |> 
+  mutate(text = paste0(round(perc_pos_m, 1), " (95%-CI: ", 
+                       round(perc_pos_lower, 1), "-",
+                       round(perc_pos_upper, 1), ")"))
+
+d_coefs_sim |> 
+  group_by(Name_std) |>
+  mutate(iter = row_number()) |>
+  ungroup() |>
+  left_join(d_traits,
+            by = "Name_std") |>
+  group_by(mass_cat, iter) |> 
+  summarise(perc_pos = mean(`A:height` > 0) * 100,
+            .groups = "drop") |> 
+  group_by(mass_cat) |> 
+  summarise(perc_pos_m = mean(perc_pos),
+            perc_pos_lower = ci(perc_pos)$CI_low,
+            perc_pos_upper = ci(perc_pos)$CI_high,
+            .groups = "drop") |> 
+  mutate(text = paste0(round(perc_pos_m, 1), " (95%-CI: ", 
+                       round(perc_pos_lower, 1), "-",
+                       round(perc_pos_upper, 1), ")"))
+
+d_coefs_sim |> 
+  group_by(Name_std) |>
+  mutate(iter = row_number()) |>
+  ungroup() |>
+  left_join(d_traits,
+            by = "Name_std") |>
+  group_by(Tavg_mean_cat, iter) |> 
+  summarise(perc_pos = mean(`A:height` > 0) * 100,
+            .groups = "drop") |> 
+  group_by(Tavg_mean_cat) |> 
+  summarise(perc_pos_m = mean(perc_pos),
+            perc_pos_lower = ci(perc_pos)$CI_low,
+            perc_pos_upper = ci(perc_pos)$CI_high,
+            .groups = "drop") |> 
+  mutate(text = paste0(round(perc_pos_m, 1), " (95%-CI: ", 
+                       round(perc_pos_lower, 1), "-",
+                       round(perc_pos_upper, 1), ")"))
+
+d_coefs_sim |> 
+  group_by(Name_std) |>
+  mutate(iter = row_number()) |>
+  ungroup() |>
+  left_join(d_traits,
+            by = "Name_std") |>
+  filter(!is.na(Spec)) |> 
+  group_by(Spec, iter) |> 
+  summarise(perc_pos = mean(`A:height` > 0) * 100,
+            .groups = "drop") |> 
+  group_by(Spec) |> 
+  summarise(perc_pos_m = mean(perc_pos),
+            perc_pos_lower = ci(perc_pos)$CI_low,
+            perc_pos_upper = ci(perc_pos)$CI_high,
+            .groups = "drop") |> 
+  mutate(text = paste0(round(perc_pos_m, 1), " (95%-CI: ", 
+                       round(perc_pos_lower, 1), "-",
+                       round(perc_pos_upper, 1), ")"))
+
+d_coefs_sim |> 
+  group_by(Name_std) |>
+  mutate(iter = row_number()) |>
+  ungroup() |>
+  left_join(d_traits,
+            by = "Name_std") |>
+  filter(overwintering_stage != "larva/pupa") |> 
+  group_by(overwintering_stage, iter) |> 
+  summarise(perc_pos = mean(`A:height` > 0) * 100,
+            .groups = "drop") |> 
+  group_by(overwintering_stage) |> 
+  summarise(perc_pos_m = mean(perc_pos),
+            perc_pos_lower = ci(perc_pos)$CI_low,
+            perc_pos_upper = ci(perc_pos)$CI_high,
+            .groups = "drop") |> 
+  mutate(text = paste0(round(perc_pos_m, 1), " (95%-CI: ", 
+                       round(perc_pos_lower, 1), "-",
+                       round(perc_pos_upper, 1), ")"))
 
 # ... Rhat #####################################################################
 ################################################################################.
@@ -2093,8 +2465,205 @@ d_Rhat_abu |>
   summarise(prop_thresh = mean(rhat < 1.1)) |> 
   pivot_wider(values_from = prop_thresh, names_from = response)
 
+# ... Table 1 / Table S3 #######################################################
+################################################################################.
 
-# ... Figure 1 #################################################################
+d_table <- lapply(list(Overall__overall = l_abu_A$fit, 
+                       mass_cat__small = l_abu_A_small$fit,
+                       mass_cat__medium = l_abu_A_medium$fit,
+                       mass_cat__large = l_abu_A_large$fit,
+                       Tavg_mean_cat__cold = l_abu_A_cold$fit,
+                       Tavg_mean_cat__intermediate = l_abu_A_intermediate$fit,
+                       Tavg_mean_cat__warm = l_abu_A_warm$fit,
+                       Spec__monophagous = l_abu_A_spec_m$fit,
+                       Spec__oligophagous = l_abu_A_spec_o$fit,
+                       Spec__polyphagous = l_abu_A_spec_p$fit,
+                       overwintering_stage__egg = l_abu_A_egg$fit,
+                       overwintering_stage__larva = l_abu_A_larva$fit,
+                       overwintering_stage__pupa = l_abu_A_pupa$fit,
+                       overwintering_stage__adult = l_abu_A_adult$fit),
+                  f_A_height_change_numbers,
+                  data = d_mod_z,
+                  terms = brmsterms(update(abu_tot ~ s(yday) + P_2day + T_2day + 
+                                             C(traptype, "contr.sum") + 
+                                             C(bulbtype, "contr.sum") + 
+                                             n_trap + C(sample_previous, "contr.sum") + 
+                                             (1 | gr) + (1 | trap_ID) + 
+                                             (1 | night_ID) + (1 | trap_ID_A), 
+                                           ". ~ A * height + ."))) |> 
+  bind_rows(.id = "trait__traitvalue") |> 
+  separate(trait__traitvalue, into = c("trait", "traitvalue"), sep = "__") |> 
+  mutate(var = "Abundance") |> 
+  bind_rows(lapply(list(Overall__overall = l_ric_A$fit, 
+                        mass_cat__small = l_ric_A_small$fit,
+                        mass_cat__medium = l_ric_A_medium$fit,
+                        mass_cat__large = l_ric_A_large$fit,
+                        Tavg_mean_cat__cold = l_ric_A_cold$fit,
+                        Tavg_mean_cat__intermediate = l_ric_A_intermediate$fit,
+                        Tavg_mean_cat__warm = l_ric_A_warm$fit,
+                        Spec__monophagous = l_ric_A_spec_m$fit,
+                        Spec__oligophagous = l_ric_A_spec_o$fit,
+                        Spec__polyphagous = l_ric_A_spec_p$fit,
+                        overwintering_stage__egg = l_ric_A_egg$fit,
+                        overwintering_stage__larva = l_ric_A_larva$fit,
+                        overwintering_stage__pupa = l_ric_A_pupa$fit,
+                        overwintering_stage__adult = l_ric_A_adult$fit),
+                   f_A_height_change_numbers,
+                   data = d_mod_z,
+                   terms = brmsterms(update(SCcorr_ric ~ s(yday) + P_2day + T_2day + 
+                                              C(traptype, "contr.sum") + 
+                                              C(bulbtype, "contr.sum") + 
+                                              n_trap + C(sample_previous, "contr.sum") + 
+                                              (1 | gr) + (1 | trap_ID) + 
+                                              (1 | night_ID) + (1 | trap_ID_A), 
+                                            ". ~ A * height + ."))) |> 
+              bind_rows(.id = "trait__traitvalue") |> 
+              separate(trait__traitvalue, into = c("trait", "traitvalue"), sep = "__") |> 
+              mutate(var = "Richness")) |> 
+  bind_rows(lapply(list(Overall__overall = l_mass_A$fit, 
+                        mass_cat__small = l_mass_A_small$fit,
+                        mass_cat__medium = l_mass_A_medium$fit,
+                        mass_cat__large = l_mass_A_large$fit,
+                        Tavg_mean_cat__cold = l_mass_A_cold$fit,
+                        Tavg_mean_cat__intermediate = l_mass_A_intermediate$fit,
+                        Tavg_mean_cat__warm = l_mass_A_warm$fit,
+                        Spec__monophagous = l_mass_A_spec_m$fit,
+                        Spec__oligophagous = l_mass_A_spec_o$fit,
+                        Spec__polyphagous = l_mass_A_spec_p$fit,
+                        overwintering_stage__egg = l_mass_A_egg$fit,
+                        overwintering_stage__larva = l_mass_A_larva$fit,
+                        overwintering_stage__pupa = l_mass_A_pupa$fit,
+                        overwintering_stage__adult = l_mass_A_adult$fit),
+                   f_A_height_change_numbers,
+                   data = d_mod_z,
+                   terms = brmsterms(update(mass_tot ~ s(yday) + P_2day + T_2day + 
+                                              C(traptype, "contr.sum") + 
+                                              C(bulbtype, "contr.sum") + 
+                                              n_trap + C(sample_previous, "contr.sum") + 
+                                              (1 | gr) + (1 | trap_ID) + 
+                                              (1 | night_ID) + (1 | trap_ID_A), 
+                                            ". ~ A * height + ."))) |> 
+              bind_rows(.id = "trait__traitvalue") |> 
+              separate(trait__traitvalue, into = c("trait", "traitvalue"), sep = "__") |> 
+              mutate(var = "Biomass"))
+
+d_scalings_height <- d_scalings |> 
+  filter(data == "full",
+         var == "height")
+
+d_h_threshold <- lapply(list(Overall__overall = l_abu_A$fit, 
+                             mass_cat__small = l_abu_A_small$fit,
+                             mass_cat__medium = l_abu_A_medium$fit,
+                             mass_cat__large = l_abu_A_large$fit,
+                             Tavg_mean_cat__cold = l_abu_A_cold$fit,
+                             Tavg_mean_cat__intermediate = l_abu_A_intermediate$fit,
+                             Tavg_mean_cat__warm = l_abu_A_warm$fit,
+                             Spec__monophagous = l_abu_A_spec_m$fit,
+                             Spec__oligophagous = l_abu_A_spec_o$fit,
+                             Spec__polyphagous = l_abu_A_spec_p$fit,
+                             overwintering_stage__egg = l_abu_A_egg$fit,
+                             overwintering_stage__larva = l_abu_A_larva$fit,
+                             overwintering_stage__pupa = l_abu_A_pupa$fit,
+                             overwintering_stage__adult = l_abu_A_adult$fit),
+                        f_extract_slopes) |> 
+  bind_rows(.id = "trait__traitvalue") |> 
+  separate(trait__traitvalue, into = c("trait", "traitvalue"), sep = "__") |> 
+  mutate(var = "Abundance") |> 
+  bind_rows(lapply(list(Overall__overall = l_ric_A$fit, 
+                        mass_cat__small = l_ric_A_small$fit,
+                        mass_cat__medium = l_ric_A_medium$fit,
+                        mass_cat__large = l_ric_A_large$fit,
+                        Tavg_mean_cat__cold = l_ric_A_cold$fit,
+                        Tavg_mean_cat__intermediate = l_ric_A_intermediate$fit,
+                        Tavg_mean_cat__warm = l_ric_A_warm$fit,
+                        Spec__monophagous = l_ric_A_spec_m$fit,
+                        Spec__oligophagous = l_ric_A_spec_o$fit,
+                        Spec__polyphagous = l_ric_A_spec_p$fit,
+                        overwintering_stage__egg = l_ric_A_egg$fit,
+                        overwintering_stage__larva = l_ric_A_larva$fit,
+                        overwintering_stage__pupa = l_ric_A_pupa$fit,
+                        overwintering_stage__adult = l_ric_A_adult$fit),
+                   f_extract_slopes) |> 
+              bind_rows(.id = "trait__traitvalue") |> 
+              separate(trait__traitvalue, into = c("trait", "traitvalue"), sep = "__") |> 
+              mutate(var = "Richness")) |> 
+  bind_rows(lapply(list(Overall__overall = l_mass_A$fit, 
+                        mass_cat__small = l_mass_A_small$fit,
+                        mass_cat__medium = l_mass_A_medium$fit,
+                        mass_cat__large = l_mass_A_large$fit,
+                        Tavg_mean_cat__cold = l_mass_A_cold$fit,
+                        Tavg_mean_cat__intermediate = l_mass_A_intermediate$fit,
+                        Tavg_mean_cat__warm = l_mass_A_warm$fit,
+                        Spec__monophagous = l_mass_A_spec_m$fit,
+                        Spec__oligophagous = l_mass_A_spec_o$fit,
+                        Spec__polyphagous = l_mass_A_spec_p$fit,
+                        overwintering_stage__egg = l_mass_A_egg$fit,
+                        overwintering_stage__larva = l_mass_A_larva$fit,
+                        overwintering_stage__pupa = l_mass_A_pupa$fit,
+                        overwintering_stage__adult = l_mass_A_adult$fit),
+                   f_extract_slopes) |> 
+              bind_rows(.id = "trait__traitvalue") |> 
+              separate(trait__traitvalue, into = c("trait", "traitvalue"), sep = "__") |> 
+              mutate(var = "Biomass")) |> 
+  mutate(h_threshold = (-A / `A:height` + mean(d_mod_z$height)) * d_scalings_height$sd + d_scalings_height$mean) |> 
+  group_by(var, trait, traitvalue) |> 
+  summarise(h_threshold_mean = mean(h_threshold),
+            h_threshold_lower = ci(h_threshold)$CI_low,
+            h_threshold_upper = ci(h_threshold)$CI_high)
+
+d_h_threshold <- d_h_threshold |> 
+  mutate(h_threshold_mean = round(h_threshold_mean),
+         h_threshold_mean = case_when(h_threshold_mean < min(d_mod$height) ~ "<min",
+                                      h_threshold_mean > max(d_mod$height) ~ ">max",
+                                      .default = as.character(h_threshold_mean)),
+         h_threshold_lower = round(h_threshold_lower),
+         h_threshold_lower = case_when(h_threshold_lower < min(d_mod$height) ~ "<min",
+                                       h_threshold_lower > max(d_mod$height) ~ ">max",
+                                       .default = as.character(h_threshold_lower)),
+         h_threshold_upper = round(h_threshold_upper),
+         h_threshold_upper = case_when(h_threshold_upper < min(d_mod$height) ~ "<min",
+                                       h_threshold_upper > max(d_mod$height) ~ ">max",
+                                       .default = as.character(h_threshold_upper)),
+         h_threshold = paste0(h_threshold_mean, "\n(",
+                              h_threshold_lower, " – ",
+                              h_threshold_upper, ")")) |> 
+  select(var, trait, traitvalue, h_threshold)
+
+
+d_table |> 
+  mutate(perc_estimate = (factor_estimate - 1) * 100,
+         perc_lower = (factor_lower - 1) * 100,
+         perc_upper = (factor_upper - 1) * 100) |> 
+  select(-c(diff_log_estimate, diff_log_lower, diff_log_upper)) |> 
+  mutate(text_factor = paste0(formatC(factor_estimate, digits = 3, format = "fg", flag = "#"), 
+                              " (", 
+                              formatC(factor_lower, digits = 3, format = "fg", flag = "#"), "–", 
+                              formatC(factor_upper, digits = 3, format = "fg", flag = "#"), ")"),
+         text_perc = paste0(case_when(abs(perc_estimate) >= 100 ~ formatC(perc_estimate, format = "f", flag = "+", digits = 0),
+                                      abs(perc_estimate) >= 10 ~ formatC(perc_estimate, format = "f", flag = "+", digits = 1),
+                                      abs(perc_estimate) >= 1 ~ formatC(perc_estimate, format = "f", flag = "+", digits = 2),
+                                      .default = formatC(perc_estimate, digits = 3, format = "fg", flag = "+")), 
+                            "% (", 
+                            case_when(abs(perc_lower) >= 100 ~ formatC(perc_lower, format = "f", flag = "+", digits = 0),
+                                      abs(perc_lower) >= 10 ~ formatC(perc_lower, format = "f", flag = "+", digits = 1),
+                                      abs(perc_lower) >= 1 ~ formatC(perc_lower, format = "f", flag = "+", digits = 2),
+                                      .default = formatC(perc_lower, digits = 3, format = "fg", flag = "+")), 
+                            "%–", 
+                            case_when(abs(perc_upper) >= 100 ~ formatC(perc_upper, format = "f", flag = "+", digits = 0),
+                                      abs(perc_upper) >= 10 ~ formatC(perc_upper, format = "f", flag = "+", digits = 1),
+                                      abs(perc_upper) >= 1 ~ formatC(perc_upper, format = "f", flag = "+", digits = 2),
+                                      .default = formatC(perc_upper, digits = 3, format = "fg", flag = "+")), 
+                            "%)")) |> 
+  select(-c(factor_estimate, factor_lower, factor_upper, perc_estimate, perc_lower, perc_upper)) |> 
+  mutate(text = paste(text_factor, text_perc, sep = "\n")) |> 
+  select(-c(text_factor, text_perc)) |> 
+  pivot_wider(names_from = height, values_from = text) |> 
+  left_join(d_h_threshold, by = c("var", "trait", "traitvalue")) |> 
+  select(var, everything()) |> 
+  write_excel_csv2("Output/Tables/Table1.csv")
+
+
+# ... Figure 2 #################################################################
 ################################################################################.
 
 plot_grid(
@@ -2110,7 +2679,7 @@ plot_grid(
   f_A_height_plot(pred = l_ric_A$l_pred_fe$`A:height`,
                   data_raw = d_mod_z,
                   mean_yday = d_scalings$mean[d_scalings$data == "full" & d_scalings$var == "yday"],
-                  response = "sric") +
+                  response = "SCcorr_ric") +
     scale_y_continuous(breaks = c(0, 10, 100, 1000), trans = "log1p") +
     labs(x = "Year", y = "Richness") +
     theme(legend.position = "none",
@@ -2120,8 +2689,8 @@ plot_grid(
                   data_raw = d_mod_z,
                   mean_yday = d_scalings$mean[d_scalings$data == "full" & d_scalings$var == "yday"],
                   response = "mass_tot") +
-    scale_y_continuous(breaks = c(0, 0.0001, 0.001, 0.01, 0.1, 1),
-                       labels = c(0, 0.0001, 0.001, 0.01, 0.1, 1),
+    scale_y_continuous(breaks = c(0, 0.01, 0.1, 1, 10, 100),
+                       labels = c(0, 0.01, 0.1, 1, 10, 100),
                        trans = log_plus_trans) +
     labs(x = "Year", y = "Biomass (g)", colour = "Elevation") +
     guides(colour = guide_legend(reverse = T)) +
@@ -2135,279 +2704,7 @@ plot_grid(
 ggsave("Output/Figures/Year_trends.pdf", width = 180, height = 65,
        units = "mm", dpi = 600)
 
-# ... Figure 2 / Figure S11 ####################################################
-################################################################################.
-
-trans_spec <- scales::trans_new(name = "trans_spec",
-                                transform = \(x) ifelse(x > 0 , -(1  / (x + 1) - 1),
-                                                        x),
-                                inverse = \(x) ifelse(x > 0, 1 / (1 - x) - 1, x))
-c_factors <- c(1.1, 1.5, 2, 4)
-
-# abundance --------------------------------------------------------------------.
-
-d_incr_decr_abu <- f_A_height_incr_decr(l_abu_A$fit, d_mod_z, 
-                                           filter(d_scalings, data == "full")) |> 
-  mutate(data = "data", trait = "Full") |> 
-  bind_rows(f_A_height_incr_decr(l_abu_A_small$fit, 
-                                    d_mod_mass_z %>% filter(mass_cat == "small"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "small", trait = "Body size")) |> 
-  bind_rows(f_A_height_incr_decr(l_abu_A_medium$fit, 
-                                    d_mod_mass_z %>% filter(mass_cat == "medium"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "medium", trait = "Body size")) |> 
-  bind_rows(f_A_height_incr_decr(l_abu_A_large$fit, 
-                                    d_mod_mass_z %>% filter(mass_cat == "large"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "large", trait = "Body size")) |> 
-  bind_rows(f_A_height_incr_decr(l_abu_A_cold$fit, 
-                                    d_mod_Tavg_z %>% filter(Tavg_mean_cat == "cold"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "cold", trait = "Temperature niche")) |> 
-  bind_rows(f_A_height_incr_decr(l_abu_A_intermediate$fit, 
-                                    d_mod_Tavg_z %>% filter(Tavg_mean_cat == "intermediate"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "interm.", trait = "Temperature niche")) |> 
-  bind_rows(f_A_height_incr_decr(l_abu_A_warm$fit, 
-                                    d_mod_Tavg_z %>% filter(Tavg_mean_cat == "warm"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "warm", trait = "Temperature niche")) |> 
-  bind_rows(f_A_height_incr_decr(l_abu_A_spec_m$fit, 
-                                    d_mod_spec_z %>% filter(Spec == "Monophagous"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "mono.", trait = "Specialisation")) |> 
-  bind_rows(f_A_height_incr_decr(l_abu_A_spec_o$fit, 
-                                    d_mod_spec_z %>% filter(Spec == "Oligophagous"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "oligo.", trait = "Specialisation")) |> 
-  bind_rows(f_A_height_incr_decr(l_abu_A_spec_p$fit, 
-                                    d_mod_spec_z %>% filter(Spec == "Polyphagous"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "poly.", trait = "Specialisation")) |> 
-  bind_rows(f_A_height_incr_decr(l_abu_A_egg$fit, 
-                                    d_mod_hib_z %>% filter(overwintering_stage == "egg"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "egg", trait = "Overwintering stage")) |> 
-  bind_rows(f_A_height_incr_decr(l_abu_A_larva$fit, 
-                                    d_mod_hib_z %>% filter(overwintering_stage == "larva"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "larva", trait = "Overwintering stage")) |> 
-  bind_rows(f_A_height_incr_decr(l_abu_A_pupa$fit, 
-                                    d_mod_hib_z %>% filter(overwintering_stage == "pupa"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "pupa", trait = "Overwintering stage")) |> 
-  bind_rows(f_A_height_incr_decr(l_abu_A_adult$fit, 
-                                    d_mod_hib_z %>% filter(overwintering_stage == "adult"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "adult", trait = "Overwintering stage")) |> 
-  mutate(data = factor(data, levels = unique(data)),
-         trait = factor(trait, levels = unique(trait)))
-
-# richness ---------------------------------------------------------------------.
-
-d_incr_decr_ric <- f_A_height_incr_decr(l_ric_A$fit, d_mod_z, 
-                                           filter(d_scalings, data == "full")) |> 
-  mutate(data = "data", trait = "Full") |> 
-  bind_rows(f_A_height_incr_decr(l_ric_A_small$fit, 
-                                    d_mod_mass_z %>% filter(mass_cat == "small"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "small", trait = "Body size")) |> 
-  bind_rows(f_A_height_incr_decr(l_ric_A_medium$fit, 
-                                    d_mod_mass_z %>% filter(mass_cat == "medium"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "medium", trait = "Body size")) |> 
-  bind_rows(f_A_height_incr_decr(l_ric_A_large$fit, 
-                                    d_mod_mass_z %>% filter(mass_cat == "large"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "large", trait = "Body size")) |> 
-  bind_rows(f_A_height_incr_decr(l_ric_A_cold$fit, 
-                                    d_mod_Tavg_z %>% filter(Tavg_mean_cat == "cold"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "cold", trait = "Temperature niche")) |> 
-  bind_rows(f_A_height_incr_decr(l_ric_A_intermediate$fit, 
-                                    d_mod_Tavg_z %>% filter(Tavg_mean_cat == "intermediate"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "interm.", trait = "Temperature niche")) |> 
-  bind_rows(f_A_height_incr_decr(l_ric_A_warm$fit, 
-                                    d_mod_Tavg_z %>% filter(Tavg_mean_cat == "warm"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "warm", trait = "Temperature niche")) |> 
-  bind_rows(f_A_height_incr_decr(l_ric_A_spec_m$fit, 
-                                    d_mod_spec_z %>% filter(Spec == "Monophagous"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "mono.", trait = "Specialisation")) |> 
-  bind_rows(f_A_height_incr_decr(l_ric_A_spec_o$fit, 
-                                    d_mod_spec_z %>% filter(Spec == "Oligophagous"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "oligo.", trait = "Specialisation")) |> 
-  bind_rows(f_A_height_incr_decr(l_ric_A_spec_p$fit, 
-                                    d_mod_spec_z %>% filter(Spec == "Polyphagous"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "poly.", trait = "Specialisation")) |> 
-  bind_rows(f_A_height_incr_decr(l_ric_A_egg$fit, 
-                                    d_mod_hib_z %>% filter(overwintering_stage == "egg"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "egg", trait = "Overwintering stage")) |> 
-  bind_rows(f_A_height_incr_decr(l_ric_A_larva$fit, 
-                                    d_mod_hib_z %>% filter(overwintering_stage == "larva"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "larva", trait = "Overwintering stage")) |> 
-  bind_rows(f_A_height_incr_decr(l_ric_A_pupa$fit, 
-                                    d_mod_hib_z %>% filter(overwintering_stage == "pupa"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "pupa", trait = "Overwintering stage")) |> 
-  bind_rows(f_A_height_incr_decr(l_ric_A_adult$fit, 
-                                    d_mod_hib_z %>% filter(overwintering_stage == "adult"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "adult", trait = "Overwintering stage")) |> 
-  mutate(data = factor(data, levels = unique(data)),
-         trait = factor(trait, levels = unique(trait)))
-
-# combined graph (abundance/richness) ------------------------------------------.
-
-d_incr_decr_abu |> 
-  mutate(response = "Abundance") |> 
-  bind_rows(d_incr_decr_ric |> 
-              mutate(response = "Richness")) |> 
-  mutate(P_cut = cut(P_sum, breaks = c(0, .8, .9, .95, 1),
-                     labels = c("I1", "I2", "I3", "I4"),
-                     include.lowest = T, right = F),
-         test = factor(test, levels = c("decrease", "increase"),
-                       labels = c("Decr.", "Incr."))) |> 
-  group_by(response, data, test) |> 
-  arrange(P_sum) |> 
-  mutate(first = !duplicated(P_cut) & P_cut != "I1") |> 
-  ungroup() |> 
-  ggplot(aes(x = threshold, y = P_sum)) +
-  geom_rect(xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf,
-            aes(fill = trait %in% c("Body size", "Specialisation")),
-            colour = NA) +
-  scale_fill_manual(values = c("white", "grey80"), guide = "none") +
-  geom_hline(yintercept = c(0, 1), colour = "grey20") +
-  new_scale("fill") +
-  geom_tile(aes(fill = threshold_cut, height = P_sum, y = P_sum/2, width = xwidth)) +
-  geom_line(size = .25) +
-  geom_point(data = function(x) filter(x, first), aes(size = P_cut)) +
-  facet_nested(trait + data ~ response + height + test, scales = "free_x") +
-  scale_x_continuous(trans = trans_spec,
-                     breaks = c(rev(1/c_factors - 1), c_factors - 1),
-                     labels = c(paste0("1/", rev(c_factors)),
-                                c_factors)) +
-  scale_y_continuous(breaks = c(0, 0.5, 1), labels = c(0, 50, 100)) +
-  scale_fill_manual(values = RColorBrewer::brewer.pal(11, "PiYG")[-c(5,7)], guide = "none") +
-  scale_size_manual(values = c(I2 = .6, I3 = .8, I4 = 1)) +
-  coord_cartesian(ylim = c(0, 1)) +
-  theme(legend.position = "none",
-        axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5),
-        axis.title = element_text(size = v_textsize["axis.title"]),
-        axis.text = element_text(size = v_textsize["axis.text"]),
-        strip.text = element_text(size = v_textsize["axis.title"])) +
-  labs(x = "50-year change", y = "Cumulative propability (%)")
-
-ggsave("Output/Figures/Incr_decr_abu_ric.pdf", width = 180, height = 205,
-       units = "mm", dpi = 600)
-
-# biomass ----------------------------------------------------------------------.
-
-d_incr_decr_mass <- f_A_height_incr_decr(l_mass_A$fit, d_mod_z, 
-                                            filter(d_scalings, data == "full")) |> 
-  mutate(data = "data", trait = "Full") |> 
-  bind_rows(f_A_height_incr_decr(l_mass_A_small$fit, 
-                                    d_mod_mass_z %>% filter(mass_cat == "small"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "small", trait = "Body size")) |> 
-  bind_rows(f_A_height_incr_decr(l_mass_A_medium$fit, 
-                                    d_mod_mass_z %>% filter(mass_cat == "medium"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "medium", trait = "Body size")) |> 
-  bind_rows(f_A_height_incr_decr(l_mass_A_large$fit, 
-                                    d_mod_mass_z %>% filter(mass_cat == "large"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "large", trait = "Body size")) |> 
-  bind_rows(f_A_height_incr_decr(l_mass_A_cold$fit, 
-                                    d_mod_Tavg_z %>% filter(Tavg_mean_cat == "cold"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "cold", trait = "Temperature niche")) |> 
-  bind_rows(f_A_height_incr_decr(l_mass_A_intermediate$fit, 
-                                    d_mod_Tavg_z %>% filter(Tavg_mean_cat == "intermediate"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "interm.", trait = "Temperature niche")) |> 
-  bind_rows(f_A_height_incr_decr(l_mass_A_warm$fit, 
-                                    d_mod_Tavg_z %>% filter(Tavg_mean_cat == "warm"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "warm", trait = "Temperature niche")) |> 
-  bind_rows(f_A_height_incr_decr(l_mass_A_spec_m$fit, 
-                                    d_mod_spec_z %>% filter(Spec == "Monophagous"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "mono.", trait = "Specialisation")) |> 
-  bind_rows(f_A_height_incr_decr(l_mass_A_spec_o$fit, 
-                                    d_mod_spec_z %>% filter(Spec == "Oligophagous"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "oligo.", trait = "Specialisation")) |> 
-  bind_rows(f_A_height_incr_decr(l_mass_A_spec_p$fit, 
-                                    d_mod_spec_z %>% filter(Spec == "Polyphagous"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "poly.", trait = "Specialisation")) |> 
-  bind_rows(f_A_height_incr_decr(l_mass_A_egg$fit, 
-                                    d_mod_hib_z %>% filter(overwintering_stage == "egg"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "egg", trait = "Overwintering stage")) |> 
-  bind_rows(f_A_height_incr_decr(l_mass_A_larva$fit, 
-                                    d_mod_hib_z %>% filter(overwintering_stage == "larva"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "larva", trait = "Overwintering stage")) |> 
-  bind_rows(f_A_height_incr_decr(l_mass_A_pupa$fit, 
-                                    d_mod_hib_z %>% filter(overwintering_stage == "pupa"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "pupa", trait = "Overwintering stage")) |> 
-  bind_rows(f_A_height_incr_decr(l_mass_A_adult$fit, 
-                                    d_mod_hib_z %>% filter(overwintering_stage == "adult"), 
-                                    filter(d_scalings, data == "full")) |> 
-              mutate(data = "adult", trait = "Overwintering stage")) |> 
-  mutate(data = factor(data, levels = unique(data)),
-         trait = factor(trait, levels = unique(trait)))
-
-d_incr_decr_mass |> 
-  mutate(P_cut = cut(P_sum, breaks = c(0, .8, .9, .95, 1),
-                     labels = c("I1", "I2", "I3", "I4"),
-                     include.lowest = T, right = F),
-         test = factor(test, levels = c("decrease", "increase"),
-                       labels = c("Decr.", "Incr."))) |> 
-  group_by(data, test) |> 
-  arrange(P_sum) |> 
-  mutate(first = !duplicated(P_cut) & P_cut != "I1") |> 
-  ungroup() |> 
-  ggplot(aes(x = threshold, y = P_sum)) +
-  geom_rect(xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf,
-            aes(fill = trait %in% c("Body size", "Specialisation")),
-            colour = NA) +
-  scale_fill_manual(values = c("white", "grey80"), guide = "none") +
-  geom_hline(yintercept = c(0, 1), colour = "grey20") +
-  new_scale("fill") +
-  geom_tile(aes(fill = threshold_cut, height = P_sum, y = P_sum/2, width = xwidth)) +
-  geom_line(size = .25) +
-  geom_point(data = function(x) filter(x, first), aes(size = P_cut)) +
-  facet_nested(trait + data ~ height + test, scales = "free_x") +
-  scale_x_continuous(trans = trans_spec,
-                     breaks = c(rev(1/c_factors - 1), c_factors - 1),
-                     labels = c(paste0("1/", rev(c_factors)),
-                                c_factors)) +
-  scale_y_continuous(breaks = c(0, 0.5, 1), labels = c(0, 50, 100)) +
-  scale_fill_manual(values = RColorBrewer::brewer.pal(11, "PiYG")[-c(5,7)], guide = "none") +
-  scale_size_manual(values = c(I2 = .6, I3 = .8, I4 = 1)) +
-  coord_cartesian(ylim = c(0, 1)) +
-  theme(legend.position = "none",
-        axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5),
-        axis.title = element_text(size = v_textsize["axis.title"]),
-        axis.text = element_text(size = v_textsize["axis.text"]),
-        strip.text = element_text(size = v_textsize["axis.title"])) +
-  labs(x = "50-year change", y = "Cumulative propability (%)")
-
-ggsave("Output/Figures/Incr_decr_mass.pdf", width = 90, height = 195,
-       units = "mm", dpi = 600)
-
-# ... Figure 3 / Figures S13 & S14 #############################################
+# ... Figure 3 / Figures S12 & S13 #############################################
 ################################################################################.
 
 p_legend <- cowplot::get_legend(f_A_height_plot_comb(list(small = l_abu_A_small$l_pred_fe$`A:height`),
@@ -2485,7 +2782,7 @@ plot_grid(
       f_A_height_plot_comb(list(small = l_ric_A_small$l_pred_fe$`A:height`,
                                 medium = l_ric_A_medium$l_pred_fe$`A:height`,
                                 large = l_ric_A_large$l_pred_fe$`A:height`),
-                           response = "sric",
+                           response = "SCcorr_ric",
                            name = "Body size") +
         labs(y = "Richness") +
         theme(axis.title.x = element_blank(),
@@ -2496,7 +2793,7 @@ plot_grid(
       f_A_height_plot_comb(list(cold = l_ric_A_cold$l_pred_fe$`A:height`,
                                 intermediate = l_ric_A_intermediate$l_pred_fe$`A:height`,
                                 warm = l_ric_A_warm$l_pred_fe$`A:height`),
-                           response = "sric",
+                           response = "SCcorr_ric",
                            name = "Temperature niche") +
         labs(y = "Richness") +
         theme(axis.title.x = element_blank(),
@@ -2507,7 +2804,7 @@ plot_grid(
       f_A_height_plot_comb(list(monophagous = l_ric_A_spec_m$l_pred_fe$`A:height`,
                                 oligophagous = l_ric_A_spec_o$l_pred_fe$`A:height`,
                                 polyphagous = l_ric_A_spec_p$l_pred_fe$`A:height`),
-                           response = "sric",
+                           response = "SCcorr_ric",
                            name = "Food specialisation") +
         labs(y = "Richness") +
         theme(axis.title.x = element_blank(),
@@ -2524,7 +2821,7 @@ plot_grid(
                             larva = l_ric_A_larva$l_pred_fe$`A:height`,
                             pupa = l_ric_A_pupa$l_pred_fe$`A:height`,
                             adult = l_ric_A_adult$l_pred_fe$`A:height`),
-                       response = "sric",
+                       response = "SCcorr_ric",
                        name = "Overwintering stage") +
     labs(y = "Richness") +
     theme(legend.position = "none",
@@ -2599,7 +2896,305 @@ plot_grid(
 ggsave("Output/Figures/Trait_Year_trends_mass.pdf", width = 180, height = 200,
        units = "mm", dpi = 600)
 
-# ... Figure S8 ################################################################
+# ... Figure 4 #################################################################
+################################################################################.
+
+diff_h_or <- 1000
+diff_h_z <- diff_h_or /
+  d_scalings$sd[d_scalings$var == "height" & d_scalings$data == "full"]
+
+diff_A_or <- 10
+diff_A_z <- diff_A_or /
+  d_scalings$sd[d_scalings$var == "A" & d_scalings$data == "full"]
+
+d_traits_edit <- d_traits |> 
+  left_join(d_moths |> 
+              group_by(Name_std) |> 
+              summarise(grand_total = sum(individualCount),
+                        .groups = "drop"),
+            by = "Name_std") |> 
+  mutate(Spec = tolower(Spec),
+         Spec = factor(Spec, levels = c("monophagous", "oligophagous", "polyphagous")),
+         overwintering_stage = gsub("adult", "ad.", overwintering_stage),
+         overwintering_stage = factor(overwintering_stage, 
+                                      levels = c("egg", "larva", "pupa", "ad.")),
+         mass_cat = factor(mass_cat, levels = c("small", "medium", "large")),
+         Tavg_mean_cat = factor(Tavg_mean_cat, levels = c("cold", "intermediate", "warm")))
+
+d_coefs_mean_edit <- d_coefs_mean |> 
+  filter(var == "A:height") |> 
+  left_join(d_traits_edit,
+            by = "Name_std") |> 
+  mutate(fact_mean = exp(diff_h_z * diff_A_z * mean),
+         fact_lower = exp(diff_h_z * diff_A_z * CI_low),
+         fact_upper = exp(diff_h_z * diff_A_z * CI_high),
+         sig = fact_lower > 1 | fact_upper < 1)
+
+d_coefs_sim_edit <- d_coefs_sim |> 
+  group_by(Name_std) |> 
+  mutate(iter = row_number()) |> 
+  ungroup() |> 
+  left_join(d_traits_edit,
+            by = "Name_std") |> 
+  mutate(fact = exp(diff_h_z * diff_A_z * `A:height`))
+
+
+
+set.seed(814)
+l_intcoef_plots <- list()
+
+# mass_cat-----------------------------------------------------------------.
+
+d_smry_mass_cat <- d_coefs_sim_edit |> 
+  group_by(iter, mass_cat) |> 
+  summarise(wmean = sum(fact * grand_total) / sum(grand_total),
+            .groups = "drop") |> 
+  group_by(mass_cat) |> 
+  summarise(wmean_mean = mean(wmean),
+            wmean_lower = ci(wmean)$CI_low,
+            wmean_upper = ci(wmean)$CI_high,
+            .groups = "drop")
+
+
+l_intcoef_plots[["mass_cat"]] <-
+  d_coefs_mean_edit |> 
+  group_by(mass_cat) |> 
+  arrange(mean) |> 
+  mutate(index = row_number(),
+         median = median(index),
+         posneg = which(mean > 0)[1] - .5) |> 
+  ungroup() %>%
+  ggplot(aes(x = index)) +
+  geom_rect(data = function(x) x |>
+              group_by(mass_cat) %>%
+              group_map(~ data.frame(quantile(sapply(1:10000, f_boot, .), 
+                                              probs = c(0.025, 0.975)) %>%
+                                       t(), mass_cat = unique(.$mass_cat)),
+                        .keep = T) |>
+              bind_rows(),
+            aes(xmin = X2.5., xmax = X97.5.),
+            ymin = -Inf, ymax = Inf, fill = "lightskyblue1", inherit.aes = F) +
+  geom_vline(aes(xintercept = median), col = 4, lty = 2) +
+  geom_vline(aes(xintercept = posneg), col = 4) +
+  geom_hline(data = \(x) x |> 
+               select(mass_cat) |> 
+               distinct() |> 
+               mutate(yintercept = 1),
+             aes(yintercept = yintercept), lty = 2) +
+  geom_linerange(aes(ymin = fact_lower, ymax = fact_upper), alpha = .5, size = .25) +
+  geom_rect(data = d_smry_mass_cat,
+            aes(ymin = wmean_lower, ymax = wmean_upper),
+            xmin = -Inf, xmax = Inf,
+            fill = 2, colour = NA, alpha = .7, inherit.aes = F) +
+  geom_hline(data = d_smry_mass_cat,
+             aes(yintercept = wmean_mean),
+             colour = "red4", size = 1, alpha = .7) +
+  geom_point(aes(y = fact_mean), size = .5)  +
+  facet_nested(~ "Body size" + mass_cat,
+               scales = "free_x", space = "free_x") +
+  scale_y_log10(breaks = c(.1, .5, 1, 2, 10)) +
+  coord_cartesian(ylim = c(.1, 20)) +
+  theme(axis.text.x = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        strip.text = element_text(size = v_textsize["axis.title"]),
+        axis.text.y = element_text(size = v_textsize["axis.text"]),
+        axis.title.y = element_text(size = v_textsize["axis.title"])) +
+  labs(y = "Interactive effect")
+
+# Tavg_mean_cat-----------------------------------------------------------------.
+
+d_smry_Tavg_mean_cat <- d_coefs_sim_edit |> 
+  group_by(iter, Tavg_mean_cat) |> 
+  summarise(wmean = sum(fact * grand_total) / sum(grand_total),
+            .groups = "drop") |> 
+  group_by(Tavg_mean_cat) |> 
+  summarise(wmean_mean = mean(wmean),
+            wmean_lower = ci(wmean)$CI_low,
+            wmean_upper = ci(wmean)$CI_high,
+            .groups = "drop")
+
+
+l_intcoef_plots[["Tavg_mean_cat"]] <- d_coefs_mean_edit |> 
+  group_by(Tavg_mean_cat) |> 
+  arrange(mean) |> 
+  mutate(index = row_number(),
+         median = median(index),
+         posneg = which(mean > 0)[1] - .5) |> 
+  ungroup() %>%
+  ggplot(aes(x = index)) +
+  geom_rect(data = function(x) x |> 
+              group_by(Tavg_mean_cat) %>%
+              group_map(~ data.frame(quantile(sapply(1:10000, f_boot, .), 
+                                              probs = c(0.025, 0.975)) %>%
+                                       t(), Tavg_mean_cat = unique(.$Tavg_mean_cat)),
+                        .keep = T) |> 
+              bind_rows(),
+            aes(xmin = X2.5., xmax = X97.5.), 
+            ymin = -Inf, ymax = Inf, fill = "lightskyblue1", inherit.aes = F) +
+  geom_vline(aes(xintercept = median), col = 4, lty = 2) +
+  geom_vline(aes(xintercept = posneg), col = 4) +
+  geom_hline(data = \(x) x |> 
+               select(Tavg_mean_cat) |> 
+               distinct() |> 
+               mutate(yintercept = 1),
+             aes(yintercept = yintercept), lty = 2) +
+  geom_linerange(aes(ymin = fact_lower, ymax = fact_upper), alpha = .5, size = .25) +
+  geom_rect(data = d_smry_Tavg_mean_cat,
+            aes(ymin = wmean_lower, ymax = wmean_upper),
+            xmin = -Inf, xmax = Inf,
+            fill = 2, colour = NA, alpha = .7, inherit.aes = F) +
+  geom_hline(data = d_smry_Tavg_mean_cat,
+             aes(yintercept = wmean_mean), 
+             colour = "red4", size = 1, alpha = .7) +
+  geom_point(aes(y = fact_mean), size = .5)  +
+  facet_nested(~ "Temperature niche" + Tavg_mean_cat,
+               scales = "free_x", space = "free_x") +
+  scale_y_log10(breaks = c(.1, .5, 1, 2, 10)) +
+  coord_cartesian(ylim = c(.1, 20)) +
+  theme(axis.text.x = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        strip.text = element_text(size = v_textsize["axis.title"]),
+        axis.text.y = element_text(size = v_textsize["axis.text"]),
+        axis.title.y = element_text(size = v_textsize["axis.title"])) +
+  labs(y = "Interactive effect")
+
+# Spec-----------------------------------------------------------------.
+
+d_smry_Spec <- d_coefs_sim_edit |>
+  filter(!is.na(Spec)) |> 
+  group_by(iter, Spec) |> 
+  summarise(wmean = sum(fact * grand_total) / sum(grand_total),
+            .groups = "drop") |> 
+  group_by(Spec) |> 
+  summarise(wmean_mean = mean(wmean),
+            wmean_lower = ci(wmean)$CI_low,
+            wmean_upper = ci(wmean)$CI_high,
+            .groups = "drop")
+
+
+l_intcoef_plots[["Spec"]] <- d_coefs_mean_edit |> 
+  filter(!is.na(Spec)) |> 
+  group_by(Spec) |> 
+  arrange(mean) |> 
+  mutate(index = row_number(),
+         median = median(index),
+         posneg = which(mean > 0)[1] - .5) |> 
+  ungroup() %>%
+  ggplot(aes(x = index)) +
+  geom_rect(data = function(x) x |> 
+              group_by(Spec) %>%
+              group_map(~ data.frame(quantile(sapply(1:10000, f_boot, .), 
+                                              probs = c(0.025, 0.975)) %>%
+                                       t(), Spec = unique(.$Spec)),
+                        .keep = T) |> 
+              bind_rows(),
+            aes(xmin = X2.5., xmax = X97.5.), 
+            ymin = -Inf, ymax = Inf, fill = "lightskyblue1", inherit.aes = F) +
+  geom_vline(aes(xintercept = median), col = 4, lty = 2) +
+  geom_vline(aes(xintercept = posneg), col = 4) +
+  geom_hline(data = \(x) x |> 
+               select(Spec) |> 
+               distinct() |> 
+               mutate(yintercept = 1),
+             aes(yintercept = yintercept), lty = 2) +
+  geom_linerange(aes(ymin = fact_lower, ymax = fact_upper), alpha = .5, size = .25) +
+  geom_rect(data = d_smry_Spec,
+            aes(ymin = wmean_lower, ymax = wmean_upper),
+            xmin = -Inf, xmax = Inf,
+            fill = 2, colour = NA, alpha = .7, inherit.aes = F) +
+  geom_hline(data = d_smry_Spec,
+             aes(yintercept = wmean_mean), 
+             colour = "red4", size = 1, alpha = .7) +
+  geom_point(aes(y = fact_mean), size = .5)  +
+  facet_nested(~ "Food specialisation" + Spec,
+               scales = "free_x", space = "free_x") +
+  scale_y_log10(breaks = c(.1, .5, 1, 2, 10)) +
+  coord_cartesian(ylim = c(.1, 20)) +
+  theme(axis.text.x = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        strip.text = element_text(size = v_textsize["axis.title"]),
+        axis.text.y = element_text(size = v_textsize["axis.text"]),
+        axis.title.y = element_text(size = v_textsize["axis.title"])) +
+  labs(y = "Interactive effect")
+
+# overwintering_stage-----------------------------------------------------------------.
+
+d_smry_overwintering_stage <- d_coefs_sim_edit |> 
+  filter(overwintering_stage != "larva/pupa",
+         !is.na(overwintering_stage)) |> 
+  group_by(iter, overwintering_stage) |> 
+  summarise(wmean = sum(fact * grand_total) / sum(grand_total),
+            .groups = "drop") |> 
+  group_by(overwintering_stage) |> 
+  summarise(wmean_mean = mean(wmean),
+            wmean_lower = ci(wmean)$CI_low,
+            wmean_upper = ci(wmean)$CI_high,
+            .groups = "drop")
+
+
+l_intcoef_plots[["overwintering_stage"]] <-
+  d_coefs_mean_edit |> 
+  filter(overwintering_stage != "larva/pupa",
+         !is.na(overwintering_stage)) |> 
+  group_by(overwintering_stage) |> 
+  arrange(mean) |> 
+  mutate(index = row_number(),
+         median = median(index),
+         posneg = which(mean > 0)[1] - .5) |> 
+  ungroup() %>%
+  ggplot(aes(x = index)) +
+  geom_rect(data = function(x) x |> 
+              group_by(overwintering_stage) %>%
+              group_map(~ data.frame(quantile(sapply(1:10000, f_boot, .), 
+                                              probs = c(0.025, 0.975)) %>%
+                                       t(), overwintering_stage = unique(.$overwintering_stage)),
+                        .keep = T) |> 
+              bind_rows(),
+            aes(xmin = X2.5., xmax = X97.5.), 
+            ymin = -Inf, ymax = Inf, fill = "lightskyblue1", inherit.aes = F) +
+  geom_vline(aes(xintercept = median), col = 4, lty = 2) +
+  geom_vline(aes(xintercept = posneg), col = 4) +
+  geom_hline(data = \(x) x |> 
+               select(overwintering_stage) |> 
+               distinct() |> 
+               mutate(yintercept = 1),
+             aes(yintercept = yintercept), lty = 2) +
+  geom_linerange(aes(ymin = fact_lower, ymax = fact_upper), alpha = .5, size = .25) +
+  geom_rect(data = d_smry_overwintering_stage,
+            aes(ymin = wmean_lower, ymax = wmean_upper),
+            xmin = -Inf, xmax = Inf,
+            fill = 2, colour = NA, alpha = .7, inherit.aes = F) +
+  geom_hline(data = d_smry_overwintering_stage,
+             aes(yintercept = wmean_mean), 
+             colour = "red4", size = 1, alpha = .7) +
+  geom_point(aes(y = fact_mean), size = .5)  +
+  facet_nested(~ "Overwintering stage" + overwintering_stage,
+               scales = "free_x", space = "free_x") +
+  scale_y_log10(breaks = c(.1, .5, 1, 2, 10)) +
+  coord_cartesian(ylim = c(.1, 20)) +
+  theme(axis.text.x = element_blank(),
+        axis.title.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        strip.text = element_text(size = v_textsize["axis.title"]),
+        axis.text.y = element_text(size = v_textsize["axis.text"]),
+        axis.title.y = element_text(size = v_textsize["axis.title"])) +
+  labs(y = "Interactive effect")
+
+# combined plot ----------------------------------------------------------------.
+
+plot_grid(plotlist = l_intcoef_plots,
+          ncol = 1,
+          labels = c("(a)", "(b)", "(c)", "(d)"), 
+          label_size = v_textsize["axis.title"])
+
+ggsave(paste0(dat.dir, "Output/Figures/Aheight_interaction.jpg"), 
+       width = 180, height = 200,
+       units = "mm", dpi = 600)
+
+# ... Figure S7 ################################################################
 ################################################################################.
 
 l_plots_cov1_A_abu <- c(l_abu_A$l_pred_fe, l_abu_A$l_pred_sm) %>% 
@@ -2641,12 +3236,12 @@ plot_grid(
 ggsave(file = "Output/Figures/Covariates_abu_A.jpeg",
        width = 180, height = 210, units = "mm", dpi = 600)
 
-# ... Figure S9 ################################################################
+# ... Figure S8 ################################################################
 ################################################################################.
 
 l_plots_cov1_A_ric <- c(l_ric_A$l_pred_fe, l_ric_A$l_pred_sm) %>% 
   keep(!names(.) %in% c("A", "height", "A:height")) %>%
-  map(f_plot_pred, data = d_mod, response = "sric", line.size = .75, 
+  map(f_plot_pred, data = d_mod, response = "SCcorr_ric", line.size = .75, 
       hours_sel = which(d_mod_z$traptype == "p" & d_mod_z$hours_data))
 
 l_plots_cov1_A_ric <- lapply(l_plots_cov1_A_ric,
@@ -2654,7 +3249,7 @@ l_plots_cov1_A_ric <- lapply(l_plots_cov1_A_ric,
                                theme(axis.title = element_text(size = v_textsize["axis.title"]),
                                      axis.text = element_text(size = v_textsize["axis.text"])) +
                                labs(y = "Richness") +
-                               scale_y_continuous(breaks = c(0, 10, 100), 
+                               scale_y_continuous(breaks = c(0, 10, 100, 1000), 
                                                   trans = "log1p"))
 
 l_plots_cov1_A_ric <- l_plots_cov1_A_ric[c("yday", "P_2day", "T_2day",
@@ -2684,7 +3279,7 @@ plot_grid(
 ggsave(file = "Output/Figures/Covariates_ric_A.jpeg",
        width = 180, height = 210, units = "mm", dpi = 600)
 
-# ... Figure S10 ###############################################################
+# ... Figure S9 ################################################################
 ################################################################################.
 
 l_plots_cov1_A_mass <- c(l_mass_A$l_pred_fe, l_mass_A$l_pred_sm) %>% 
@@ -2696,9 +3291,9 @@ l_plots_cov1_A_mass <- lapply(l_plots_cov1_A_mass,
                               \(x) x +
                                 theme(axis.title = element_text(size = v_textsize["axis.title"]),
                                       axis.text = element_text(size = v_textsize["axis.text"])) +
-                                labs(y = "Biomass (g)")+ 
-                                scale_y_continuous(breaks = c(0, 0.0001, 0.001, 0.01, 0.1, 1),
-                                                   labels = c(0, 0.0001, 0.001, 0.01, 0.1, 1),
+                                labs(y = "Biomass (g)") + 
+                                scale_y_continuous(breaks = c(0, 0.01, 0.1, 1, 10, 100),
+                                                   labels = c(0, 0.01, 0.1, 1, 10, 100),
                                                    trans = log_plus_trans))
 
 l_plots_cov1_A_mass <- l_plots_cov1_A_mass[c("yday", "P_2day", "T_2day",
@@ -2728,11 +3323,11 @@ plot_grid(
 ggsave(file = "Output/Figures/Covariates_mass_A.jpeg",
        width = 180, height = 210, units = "mm", dpi = 600)
 
-# ... Figure S12 ###############################################################
+# ... Figure S10 ###############################################################
 ################################################################################.
 
 plot_grid(
-  # abundance ------------------------------------------------------------------.
+  # Abundance ------------------------------------------------------------------.
   f_A_height_plot(pred = l_abu_A$l_pred_fe$`A:height`,
                   data_raw = d_mod_z,
                   mean_yday = d_scalings$mean[d_scalings$data == "full" & d_scalings$var == "yday"],
@@ -2778,14 +3373,14 @@ plot_grid(
           axis.text = element_blank()) +
     facet_grid(~ "Full data only"),
   
-  # richness -------------------------------------------------------------------.
+  # Richness -------------------------------------------------------------------.
   f_A_height_plot(pred = l_ric_A$l_pred_fe$`A:height`,
                   data_raw = d_mod_z,
                   mean_yday = d_scalings$mean[d_scalings$data == "full" & d_scalings$var == "yday"],
-                  response = "sric") +
+                  response = "SCcorr_ric") +
     scale_y_continuous(breaks = c(0, 10, 100, 1000), trans = "log1p",
                        labels = c("0", "10", "    100",  "1000")) +
-    coord_cartesian(ylim = c(NA, 300),
+    coord_cartesian(ylim = c(NA, 1200),
                     xlim = as.Date(c("1972-01-01", "2021-12-31"))) +
     labs(x = NULL, y = "Richness") +
     theme(legend.position = "none",
@@ -2793,9 +3388,9 @@ plot_grid(
   f_A_height_plot(pred = l_ric_A_lf$l_pred_fe$`A:height`,
                   data_raw = d_mod_lf_z,
                   mean_yday = d_scalings$mean[d_scalings$data == "LF" & d_scalings$var == "yday"],
-                  response = "sric") +
+                  response = "SCcorr_ric") +
     scale_y_continuous(breaks = c(0, 10, 100, 1000), trans = "log1p") +
-    coord_cartesian(ylim = c(NA, 300),
+    coord_cartesian(ylim = c(NA, 1200),
                     xlim = as.Date(c("1972-01-01", "2021-12-31"))) +
     labs(x = NULL, y = NULL) +
     theme(legend.position = "none",
@@ -2803,9 +3398,9 @@ plot_grid(
   f_A_height_plot(pred = l_ric_A_p$l_pred_fe$`A:height`,
                   data_raw = d_mod_p_z,
                   mean_yday = d_scalings$mean[d_scalings$data == "p" & d_scalings$var == "yday"],
-                  response = "sric") +
+                  response = "SCcorr_ric") +
     scale_y_continuous(breaks = c(0, 10, 100, 1000), trans = "log1p") +
-    coord_cartesian(ylim = c(NA, 300),
+    coord_cartesian(ylim = c(NA, 1200),
                     xlim = as.Date(c("1972-01-01", "2021-12-31"))) +
     labs(x = NULL, y = NULL) +
     theme(legend.position = "none",
@@ -2813,23 +3408,23 @@ plot_grid(
   f_A_height_plot(pred = l_ric_A_ne$l_pred_fe$`A:height`,
                   data_raw = d_mod_ne_z,
                   mean_yday = d_scalings$mean[d_scalings$data == "no_estimates" & d_scalings$var == "yday"],
-                  response = "sric") +
+                  response = "SCcorr_ric") +
     scale_y_continuous(breaks = c(0, 10, 100, 1000), trans = "log1p") +
-    coord_cartesian(ylim = c(NA, 300),
+    coord_cartesian(ylim = c(NA, 1200),
                     xlim = as.Date(c("1972-01-01", "2021-12-31"))) +
     labs(x = NULL, y = NULL) +
     theme(legend.position = "none",
           axis.text = element_blank()),
   
-  # biomass --------------------------------------------------------------------.
+  # Biomass --------------------------------------------------------------------.
   f_A_height_plot(pred = l_mass_A$l_pred_fe$`A:height`,
                   data_raw = d_mod_z,
                   mean_yday = d_scalings$mean[d_scalings$data == "full" & d_scalings$var == "yday"],
                   response = "mass_tot") +
-    scale_y_continuous(breaks = c(0, 0.0001, 0.001, 0.01, 0.1, 1),
-                       labels = c(0, 0.0001, " 0.001", 0.01, 0.1, 1),
+    scale_y_continuous(breaks = c(0, 0.01, 0.1, 1, 10, 100),
+                       labels = c(0, 0.01, 0.1, 1, 10, "    100"),
                        trans = log_plus_trans) +
-    coord_cartesian(ylim = c(NA, .5),
+    coord_cartesian(ylim = c(NA, 500),
                     xlim = as.Date(c("1972-01-01", "2021-12-31"))) +
     labs(x = NULL, y = "Biomass (g)") +
     theme(legend.position = "none"),
@@ -2837,10 +3432,10 @@ plot_grid(
                   data_raw = d_mod_lf_z,
                   mean_yday = d_scalings$mean[d_scalings$data == "LF" & d_scalings$var == "yday"],
                   response = "mass_tot") +
-    scale_y_continuous(breaks = c(0, 0.0001, 0.001, 0.01, 0.1, 1),
-                       labels = c(0, 0.0001, 0.001, 0.01, 0.1, 1),
+    scale_y_continuous(breaks = c(0, 0.01, 0.1, 1, 10, 100),
+                       labels = c(0, 0.01, 0.1, 1, 10, "    100"),
                        trans = log_plus_trans) +
-    coord_cartesian(ylim = c(NA, .5),
+    coord_cartesian(ylim = c(NA, 500),
                     xlim = as.Date(c("1972-01-01", "2021-12-31"))) +
     labs(x = NULL, y = NULL) +
     theme(legend.position = "none",
@@ -2849,10 +3444,10 @@ plot_grid(
                   data_raw = d_mod_p_z,
                   mean_yday = d_scalings$mean[d_scalings$data == "p" & d_scalings$var == "yday"],
                   response = "mass_tot") +
-    scale_y_continuous(breaks = c(0, 0.0001, 0.001, 0.01, 0.1, 1),
-                       labels = c(0, 0.0001, 0.001, 0.01, 0.1, 1),
+    scale_y_continuous(breaks = c(0, 0.01, 0.1, 1, 10, 100),
+                       labels = c(0, 0.01, 0.1, 1, 10, "    100"),
                        trans = log_plus_trans) +
-    coord_cartesian(ylim = c(NA, .5),
+    coord_cartesian(ylim = c(NA, 500),
                     xlim = as.Date(c("1972-01-01", "2021-12-31"))) +
     labs(x = NULL, y = NULL) +
     theme(legend.position = "none",
@@ -2861,22 +3456,175 @@ plot_grid(
                   data_raw = d_mod_ne_z,
                   mean_yday = d_scalings$mean[d_scalings$data == "no_estimates" & d_scalings$var == "yday"],
                   response = "mass_tot") +
-    scale_y_continuous(breaks = c(0, 0.0001, 0.001, 0.01, 0.1, 1),
-                       labels = c(0, 0.0001, 0.001, 0.01, 0.1, 1),
+    scale_y_continuous(breaks = c(0, 0.01, 0.1, 1, 10, 100),
+                       labels = c(0, 0.01, 0.1, 1, 10, "    100"),
                        trans = log_plus_trans) +
-    coord_cartesian(ylim = c(NA, .5),
+    coord_cartesian(ylim = c(NA, 500),
                     xlim = as.Date(c("1972-01-01", "2021-12-31"))) +
     labs(x = NULL, y = NULL) +
     theme(legend.position = "none",
           axis.text.y = element_blank()),
   
-  nrow = 3, rel_widths = c(1, .75, .75, .75))
+  nrow = 3, rel_widths = c(1, .75, .75, .75) )
 
 
-ggsave("Output/Figures/Year_trends_sensibility.jpeg", width = 180, height = 180,
+ggsave(paste0(dat.dir, "Output/Figures/Year_trends_sensibility.jpeg"), width = 180, height = 180,
        units = "mm", dpi = 400)
 
-# ... Tables S2-S17 ############################################################
+# ... Figure S11 ###############################################################
+################################################################################.
+
+# abundance model coef vs. elevation -------------------------------------------.
+
+d_slope_A_abu_height <- d_slope_A_abu |> 
+  group_by(LOC) |> 
+  summarise(slope_mean = mean(slope),
+            .groups = "drop") |> 
+  left_join(d_mod |> 
+              group_by(LOC, height) |> 
+              summarise(n_years = n_distinct(A),
+                        range_years = max(A) - min(A) + 1,
+                        .groups = "drop"),
+            by = "LOC")
+
+set.seed(41)
+mod_slope_abu <- d_slope_A_abu_height |> 
+  brm(slope_mean | weights(range_years) ~ height, data = _)
+
+d_pred_slope_abu <- data.frame(height = seq(min(d_slope_A_abu_height$height),
+                                            max(d_slope_A_abu_height$height),
+                                            length.out = 100))
+
+m_pred_slope_abu <- posterior_epred(mod_slope_abu,
+                                    newdata = d_pred_slope_abu)
+
+d_pred_slope_abu$pred <- apply(m_pred_slope_abu, 2, mean)
+d_pred_slope_abu$lower <- apply(m_pred_slope_abu, 2, function(x) ci(x)$CI_low)
+d_pred_slope_abu$upper <- apply(m_pred_slope_abu, 2, function(x) ci(x)$CI_high)
+
+# richness model coef vs. elevation --------------------------------------------.
+
+d_slope_A_SCcr_height <- d_slope_A_SCcr |> 
+  group_by(LOC) |> 
+  summarise(slope_mean = mean(slope),
+            .groups = "drop") |> 
+  left_join(d_mod |> 
+              group_by(LOC, height) |> 
+              summarise(n_years = n_distinct(A),
+                        range_years = max(A) - min(A) + 1,
+                        .groups = "drop"),
+            by = "LOC")
+
+set.seed(41)
+mod_slope_SCcr <- d_slope_A_SCcr_height |> 
+  brm(slope_mean | weights(range_years) ~ height, data = _)
+
+d_pred_slope_SCcr <- data.frame(height = seq(min(d_slope_A_SCcr_height$height),
+                                             max(d_slope_A_SCcr_height$height),
+                                             length.out = 100))
+
+m_pred_slope_SCcr <- posterior_epred(mod_slope_SCcr,
+                                     newdata = d_pred_slope_SCcr)
+
+d_pred_slope_SCcr$pred <- apply(m_pred_slope_SCcr, 2, mean)
+d_pred_slope_SCcr$lower <- apply(m_pred_slope_SCcr, 2, function(x) ci(x)$CI_low)
+d_pred_slope_SCcr$upper <- apply(m_pred_slope_SCcr, 2, function(x) ci(x)$CI_high)
+
+# biomass model coef vs. elevation ---------------------------------------------.
+
+d_slope_A_mass_height <- d_slope_A_mass |> 
+  group_by(LOC) |> 
+  summarise(slope_mean = mean(slope),
+            .groups = "drop") |> 
+  left_join(d_mod |> 
+              group_by(LOC, height) |> 
+              summarise(n_years = n_distinct(A),
+                        range_years = max(A) - min(A) + 1,
+                        .groups = "drop"),
+            by = "LOC")
+
+set.seed(41)
+mod_slope_mass <- d_slope_A_mass_height |> 
+  brm(slope_mean | weights(range_years) ~ height, data = _)
+
+d_pred_slope_mass <- data.frame(height = seq(min(d_slope_A_mass_height$height),
+                                             max(d_slope_A_mass_height$height),
+                                             length.out = 100))
+
+m_pred_slope_mass <- posterior_epred(mod_slope_mass,
+                                     newdata = d_pred_slope_mass)
+
+d_pred_slope_mass$pred <- apply(m_pred_slope_mass, 2, mean)
+d_pred_slope_mass$lower <- apply(m_pred_slope_mass, 2, function(x) ci(x)$CI_low)
+d_pred_slope_mass$upper <- apply(m_pred_slope_mass, 2, function(x) ci(x)$CI_high)
+
+# combined plot ----------------------------------------------------------------.
+
+d_slope_A_abu |> 
+  group_by(LOC) |> 
+  summarise(slope_mean = mean(slope),
+            .groups = "drop") |> 
+  mutate(par = "Abundance") |> 
+  bind_rows(d_slope_A_SCcr |> 
+              group_by(LOC) |> 
+              summarise(slope_mean = mean(slope),
+                        .groups = "drop") |> 
+              mutate(par = "Richness")) |> 
+  bind_rows(d_slope_A_mass |> 
+              group_by(LOC) |> 
+              summarise(slope_mean = mean(slope),
+                        .groups = "drop") |> 
+              mutate(par = "Biomass")) |> 
+  mutate(factor_mean = exp(slope_mean * 10 / d_scalings$sd[d_scalings$data == "full" & d_scalings$var == "A"])) |> 
+  left_join(d_mod |> 
+              group_by(LOC, height) |> 
+              summarise(n_years = n_distinct(A),
+                        range_years = max(A) - min(A) + 1,
+                        .groups = "drop"),
+            by = "LOC") |> 
+  mutate(par = factor(par, levels = c("Abundance", "Richness", "Biomass"))) |> 
+  ggplot(aes(x = height, y = factor_mean)) +
+  geom_hline(yintercept = 1, lty = 2) +
+  geom_point(aes(size = range_years), alpha = .7) +
+  geom_line(data = d_pred_slope_abu |> 
+              mutate(par = "Abundance") |> 
+              bind_rows(d_pred_slope_SCcr |> 
+                          mutate(par = "Richness")) |> 
+              bind_rows(d_pred_slope_mass |> 
+                          mutate(par = "Biomass")) |> 
+              mutate(par = factor(par, levels = c("Abundance", "Richness", "Biomass"))) |> 
+              mutate(pred = exp(pred * 10 / d_scalings$sd[d_scalings$data == "full" & d_scalings$var == "A"])), 
+            aes(y = pred), colour = "firebrick4") +
+  geom_ribbon(data = d_pred_slope_abu |> 
+                mutate(par = "Abundance") |> 
+                bind_rows(d_pred_slope_SCcr |> 
+                            mutate(par = "Richness")) |> 
+                bind_rows(d_pred_slope_mass |> 
+                            mutate(par = "Biomass")) |> 
+                mutate(par = factor(par, levels = c("Abundance", "Richness", "Biomass"))) |> 
+                mutate(across(c(lower, upper), ~ exp(. * 10 / d_scalings$sd[d_scalings$data == "full" & d_scalings$var == "A"]))),
+              aes(ymin = lower, ymax = upper), y = NA, 
+              fill = "firebrick", alpha = .3) +
+  labs(x = "Elevation (m asl.)", y = "Year effect", size = "Years range") +
+  scale_size_continuous(range = c(1, 4)) +
+  scale_y_log10() +
+  facet_grid(~ par) +
+  theme(strip.text = element_text(size = v_textsize["axis.title"]),
+        legend.title = element_text(size = v_textsize["axis.title"]),
+        axis.title = element_text(size = v_textsize["axis.title"]),
+        axis.text = element_text(size = v_textsize["axis.text"]),
+        legend.text = element_text(size = v_textsize["axis.text"]))
+
+ggsave(paste0(dat.dir, "Output/Figures/sitemodels.jpeg"), width = 180, height = 80,
+       units = "mm", dpi = 600)
+
+
+exp(fixef(mod_slope_abu) * 10 / d_scalings$sd[d_scalings$data == "full" & d_scalings$var == "A"] * 1000)
+exp(fixef(mod_slope_SCcr) * 10 / d_scalings$sd[d_scalings$data == "full" & d_scalings$var == "A"] * 1000)
+exp(fixef(mod_slope_mass) * 10 / d_scalings$sd[d_scalings$data == "full" & d_scalings$var == "A"] * 1000)
+
+
+# ... Tables S2, S4-S18 ########################################################
 ################################################################################.
 
 # full models ------------------------------------------------------------------.

@@ -5,6 +5,8 @@
 ################################################################################.
 
 library(tidyverse); theme_set(theme_classic())
+library(iNEXT)
+library(parallel)
 
 # ... read data ################################################################
 ################################################################################.
@@ -295,17 +297,16 @@ d_mod <-
   mutate(visit_ID = paste(LOC, A, yday)) %>%
   left_join(d_mass, by = "Name_std",
             relationship = "many-to-one") |> 
-  mutate(mass_sum = individualCount * mass / 1000) |> 
+  mutate(mass_sum = individualCount * mass) |> 
   group_by(LOC, visit_ID, A, yday) %>%
   summarise(abu_tot = sum(individualCount, na.rm = T),
-            sric = length(unique(Name_std)),
             mass_tot = sum(mass_sum),
             .groups = "drop") %>%
   right_join(d_samplingdates %>%
                filter(n_zeronights < 10),  # exclude stretches of 10 an more zeronights
              by = c("LOC", "A", "yday")) %>%
   mutate(visit_ID = paste(LOC, A, yday)) %>%
-  mutate_at(vars(abu_tot, sric, mass_tot), ~ ifelse(is.na(.), 0, .)) %>%
+  mutate_at(vars(abu_tot, mass_tot), ~ ifelse(is.na(.), 0, .)) %>%
   mutate(Date_prev = Samplingdate - 1,
          visit_ID_prev = paste(LOC, year(Date_prev), yday(Date_prev)),
          sample_previous = ifelse(visit_ID_prev %in% visit_ID, "yes", "no")) %>%
@@ -320,6 +321,29 @@ d_mod <-
          A_id = A) %>% # not to be transformed
   left_join(d_sites %>% select(LOC, height, height_cat), 
             by = "LOC", relationship = "many-to-one")
+
+d_SCcorr_tmp <-
+  d_moths |>
+  mutate(ID = paste(A, LOC, yday, sep = "___")) |>
+  group_by(ID) |>
+  filter(sum(ADU) > 0) |>
+  ungroup() |>
+  (\(x) split(x, x$ID))() |>
+  (\(x) lapply(x, f_iNEXT_prepare))() |>
+  iNEXT(endpoint = 1) |>
+  magrittr::extract2("AsyEst") |>
+  filter(Diversity == "Species richness") |>
+  select(Assemblage, SCcorr_ric = Estimator) |>
+  separate(Assemblage, c("A", "LOC", "yday"), sep = "___") |>
+  mutate(across(c(A, yday), ~ as.numeric(.)))
+
+d_mod <- d_mod |>
+  left_join(d_SCcorr_tmp,
+            by = c("A", "LOC", "yday"),
+            relationship = "one-to-one") |>
+  mutate(SCcorr_ric = ifelse(is.na(SCcorr_ric), 0, SCcorr_ric))
+
+rm(d_SCcorr_tmp)
 
 d_mod_ne <- d_mod %>%
   filter(!(!hours_data & traptype == "p"))
@@ -527,11 +551,10 @@ d_moths %>%
   left_join(d_traits, by = "Name_std") |> 
   group_by(LOC, visit_ID, A, yday, mass_cat) %>%
   summarise(abu_tot = sum(individualCount, na.rm = T),
-            sric = length(unique(Name_std)),
             mass_tot = sum(mass_sum),
             .groups = "drop") %>%
   pivot_wider(everything(), names_from = "mass_cat",
-              values_from = c("abu_tot", "sric", "mass_tot"),
+              values_from = c("abu_tot", "mass_tot"),
               values_fill = 0, names_sep = ".") %>%
   pivot_longer(-c(LOC, visit_ID, A, yday),
                names_to = c(".value", "mass_cat"), names_sep = "\\.") %>%
@@ -539,7 +562,7 @@ d_moths %>%
                filter(n_zeronights < 10),  # exclude stretches of 10 an more zeronights
              by = c("LOC", "A", "yday")) %>%
   mutate(visit_ID = paste(LOC, A, yday)) %>%
-  mutate_at(vars(abu_tot, sric, mass_tot), ~ ifelse(is.na(.), 0, .)) %>%
+  mutate_at(vars(abu_tot, mass_tot), ~ ifelse(is.na(.), 0, .)) %>%
   mutate(Date_prev = Samplingdate - 1,
          visit_ID_prev = paste(LOC, year(Date_prev), yday(Date_prev)),
          sample_previous = ifelse(visit_ID_prev %in% visit_ID, "yes", "no")) %>%
@@ -554,6 +577,29 @@ d_moths %>%
          A_id = A) %>% # not to be transformed
   left_join(d_sites %>% select(LOC, height, height_cat), by = "LOC",
             relationship = "many-to-one")
+
+d_SCcorr_tmp <-
+  d_reser_sub |>
+  mutate(ID = paste(A, LOC, yday, mass_cat, sep = "___")) |>
+  group_by(ID) |>
+  filter(sum(ADU) > 0) |>
+  ungroup() |>
+  (\(x) split(x, x$ID))() |>
+  (\(x) mclapply(x, f_iNEXT_prepare))() |>
+  iNEXT(endpoint = 1) |> 
+  magrittr::extract2("AsyEst") |>
+  filter(Diversity == "Species richness") |>
+  select(Assemblage, SCcorr_ric = Estimator) |>
+  separate(Assemblage, c("A", "LOC", "yday", "mass_cat"), sep = "___") |>
+  mutate(across(c(A, yday), ~ as.numeric(.)))
+
+d_mod_mass <- d_mod_mass |>
+  left_join(d_SCcorr_tmp,
+            by = c("A", "LOC", "yday", "mass_cat"),
+            relationship = "one-to-one") |>
+  mutate(SCcorr_ric = ifelse(is.na(SCcorr_ric), 0, SCcorr_ric))
+
+rm(d_SCcorr_tmp)
 
 d_mod_mass_z <- d_mod_mass %>%
   mutate(across(c(!! enquo(sel_pars)),
@@ -570,11 +616,10 @@ d_mod_Tavg <-
   left_join(d_traits, by = "Name_std") |> 
   group_by(LOC, visit_ID, A, yday, Tavg_mean_cat) %>%
   summarise(abu_tot = sum(individualCount, na.rm = T),
-            sric = length(unique(Name_std)),
             mass_tot = sum(mass_sum),
             .groups = "drop") %>%
   pivot_wider(everything(), names_from = "Tavg_mean_cat",
-              values_from = c("abu_tot", "sric", "mass_tot"),
+              values_from = c("abu_tot", "mass_tot"),
               values_fill = 0, names_sep = ".") %>%
   pivot_longer(-c(LOC, visit_ID, A, yday),
                names_to = c(".value", "Tavg_mean_cat"), names_sep = "\\.") %>%
@@ -582,7 +627,7 @@ d_mod_Tavg <-
                filter(n_zeronights < 10),  # exclude stretches of 10 an more zeronights
              by = c("LOC", "A", "yday")) %>%
   mutate(visit_ID = paste(LOC, A, yday)) %>%
-  mutate_at(vars(abu_tot, sric, mass_tot), ~ ifelse(is.na(.), 0, .)) %>%
+  mutate_at(vars(abu_tot, mass_tot), ~ ifelse(is.na(.), 0, .)) %>%
   mutate(Date_prev = Samplingdate - 1,
          visit_ID_prev = paste(LOC, year(Date_prev), yday(Date_prev)),
          sample_previous = ifelse(visit_ID_prev %in% visit_ID, "yes", "no")) %>%
@@ -597,6 +642,29 @@ d_mod_Tavg <-
          A_id = A) %>% # not to be transformed
   left_join(d_sites %>% select(LOC, height, height_cat), by = "LOC",
             relationship = "many-to-one")
+
+d_SCcorr_tmp <-
+  d_reser_sub |>
+  mutate(ID = paste(A, LOC, yday, Tavg_mean_cat, sep = "___")) |>
+  group_by(ID) |>
+  filter(sum(ADU) > 0) |>
+  ungroup() |>
+  (\(x) split(x, x$ID))() |>
+  (\(x) mclapply(x, f_iNEXT_prepare))() |>
+  iNEXT(endpoint = 1) |>
+  magrittr::extract2("AsyEst") |>
+  filter(Diversity == "Species richness") |>
+  select(Assemblage, SCcorr_ric = Estimator) |>
+  separate(Assemblage, c("A", "LOC", "yday", "Tavg_mean_cat"), sep = "___") |>
+  mutate(across(c(A, yday), ~ as.numeric(.)))
+
+d_mod_Tavg <- d_mod_Tavg |>
+  left_join(d_SCcorr_tmp,
+            by = c("A", "LOC", "yday", "Tavg_mean_cat"),
+            relationship = "one-to-one") |>
+  mutate(SCcorr_ric = ifelse(is.na(SCcorr_ric), 0, SCcorr_ric))
+
+rm(d_SCcorr_tmp)
 
 d_mod_Tavg_z <- d_mod_Tavg %>%
   mutate(across(c(!! enquo(sel_pars)),
@@ -614,11 +682,10 @@ d_mod_hib <-
   left_join(d_traits, by = "Name_std") |> 
   group_by(LOC, visit_ID, A, yday, overwintering_stage) %>%
   summarise(abu_tot = sum(individualCount, na.rm = T),
-            sric = length(unique(Name_std)),
             mass_tot = sum(mass_sum),
             .groups = "drop") %>%
   pivot_wider(everything(), names_from = "overwintering_stage",
-              values_from = c("abu_tot", "sric", "mass_tot"),
+              values_from = c("abu_tot", "mass_tot"),
               values_fill = 0, names_sep = ".") %>%
   pivot_longer(-c(LOC, visit_ID, A, yday),
                names_to = c(".value", "overwintering_stage"), names_sep = "\\.") %>%
@@ -626,7 +693,7 @@ d_mod_hib <-
                filter(n_zeronights < 10),  # exclude stretches of 10 an more zeronights
              by = c("LOC", "A", "yday")) %>%
   mutate(visit_ID = paste(LOC, A, yday)) %>%
-  mutate_at(vars(abu_tot, sric, mass_tot), ~ ifelse(is.na(.), 0, .)) %>%
+  mutate_at(vars(abu_tot, mass_tot), ~ ifelse(is.na(.), 0, .)) %>%
   mutate(Date_prev = Samplingdate - 1,
          visit_ID_prev = paste(LOC, year(Date_prev), yday(Date_prev)),
          sample_previous = ifelse(visit_ID_prev %in% visit_ID, "yes", "no")) %>%
@@ -641,6 +708,29 @@ d_mod_hib <-
          A_id = A) %>% # not to be transformed
   left_join(d_sites %>% select(LOC, height, height_cat), by = "LOC",
             relationship = "many-to-one")
+
+d_SCcorr_tmp <-
+  d_reser_sub |>
+  mutate(ID = paste(A, LOC, yday, overwintering_stage, sep = "___")) |>
+  group_by(ID) |>
+  filter(sum(ADU) > 0) |>
+  ungroup() |>
+  (\(x) split(x, x$ID))() |>
+  (\(x) mclapply(x, f_iNEXT_prepare))() |>
+  iNEXT(endpoint = 1) |> 
+  magrittr::extract2("AsyEst") |>
+  filter(Diversity == "Species richness") |>
+  select(Assemblage, SCcorr_ric = Estimator) |>
+  separate(Assemblage, c("A", "LOC", "yday", "overwintering_stage"), sep = "___") |>
+  mutate(across(c(A, yday), ~ as.numeric(.)))
+
+d_mod_hib <- d_mod_hib |>
+  left_join(d_SCcorr_tmp,
+            by = c("A", "LOC", "yday", "overwintering_stage"),
+            relationship = "one-to-one") |>
+  mutate(SCcorr_ric = ifelse(is.na(SCcorr_ric), 0, SCcorr_ric))
+
+rm(d_SCcorr_tmp)
 
 d_mod_hib_z <- d_mod_hib %>%
   mutate(across(c(!! enquo(sel_pars)),
@@ -657,11 +747,10 @@ d_mod_spec <-
   left_join(d_traits, by = "Name_std") |> 
   group_by(LOC, visit_ID, A, yday, Spec) %>%
   summarise(abu_tot = sum(individualCount, na.rm = T),
-            sric = length(unique(Name_std)),
             mass_tot = sum(mass_sum),
             .groups = "drop") %>%
   pivot_wider(everything(), names_from = "Spec",
-              values_from = c("abu_tot", "sric", "mass_tot"),
+              values_from = c("abu_tot", "mass_tot"),
               values_fill = 0, names_sep = ".") %>%
   pivot_longer(-c(LOC, visit_ID, A, yday),
                names_to = c(".value", "Spec"), names_sep = "\\.") %>%
@@ -669,7 +758,7 @@ d_mod_spec <-
                filter(n_zeronights < 10),  # exclude stretches of 10 an more zeronights
              by = c("LOC", "A", "yday")) %>%
   mutate(visit_ID = paste(LOC, A, yday)) %>%
-  mutate_at(vars(abu_tot, sric, mass_tot), ~ ifelse(is.na(.), 0, .)) %>%
+  mutate_at(vars(abu_tot, mass_tot), ~ ifelse(is.na(.), 0, .)) %>%
   mutate(Date_prev = Samplingdate - 1,
          visit_ID_prev = paste(LOC, year(Date_prev), yday(Date_prev)),
          sample_previous = ifelse(visit_ID_prev %in% visit_ID, "yes", "no")) %>%
@@ -684,6 +773,29 @@ d_mod_spec <-
          A_id = A) %>% # not to be transformed
   left_join(d_sites %>% select(LOC, height, height_cat), 
             by = "LOC", relationship = "many-to-one")
+
+d_SCcorr_tmp <-
+  d_reser_sub |>
+  mutate(ID = paste(A, LOC, yday, Spec, sep = "___")) |>
+  group_by(ID) |>
+  filter(sum(ADU) > 0) |>
+  ungroup() |>
+  (\(x) split(x, x$ID))() |>
+  (\(x) mclapply(x, f_iNEXT_prepare))() |>
+  iNEXT(endpoint = 1) |> 
+  magrittr::extract2("AsyEst") |>
+  filter(Diversity == "Species richness") |>
+  select(Assemblage, SCcorr_ric = Estimator) |>
+  separate(Assemblage, c("A", "LOC", "yday", "Spec"), sep = "___") |>
+  mutate(across(c(A, yday), ~ as.numeric(.)))
+
+d_mod_spec <- d_mod_spec |>
+  left_join(d_SCcorr_tmp,
+            by = c("A", "LOC", "yday", "Spec"),
+            relationship = "one-to-one") |>
+  mutate(SCcorr_ric = ifelse(is.na(SCcorr_ric), 0, SCcorr_ric))
+
+rm(d_SCcorr_tmp)
 
 d_mod_spec_z <- d_mod_spec %>%
   mutate(across(c(!! enquo(sel_pars)),
