@@ -233,14 +233,14 @@ f_analysis_A_site <- function(formula, data_z, scalings, family, iter, seed,
   
   if (family == "zero_inflated_negbinomial"){
     if (!is.null(hours_sel)){
-      mod_lm <- stan(file = "Stan_Copde/Stan_nb_spline_s1p1_r1.stan",
+      mod_lm <- stan(file = "Stan_Code/Stan_nb_spline_s1p1_r1.stan",
                      data = l_data,
                      chains = 4, cores = 4,
                      iter = iter)
       
     } else {
       
-      mod_lm <- stan(file = "Stan_Copde/Stan_nb_spline_s1_r1.stan",
+      mod_lm <- stan(file = "Stan_Code/Stan_nb_spline_s1_r1.stan",
                      data = l_data,
                      chains = 4, cores = 4,
                      iter = iter)
@@ -676,6 +676,9 @@ f_A_height_plot <- function(pred,
     ggplot(aes(x = Date, col = height_cat))
   
   if (!is.null(data_raw)){
+    data_raw <- data_raw %>%
+      mutate(Date = Samplingdate) 
+    
     p <- p +
       geom_point(data = data_raw, aes_string(y = response), 
                  alpha = .1, size = .4, col = "salmon4")
@@ -827,7 +830,7 @@ f_extract_slopes <- function(fit){
     C(bulbtype, "contr.sum") +
     n_trap +
     C(sample_previous, "contr.sum") +
-    (1 | gr) + (1 | trap_ID) +
+    (1 | spattemp_cluster) + (1 | trap_ID) +
     (1 | night_ID) +
     (1 | trap_ID_A)
   terms <- brmsterms(update(formula, ". ~ A * height + ."))
@@ -1751,7 +1754,7 @@ for (LOC_i in d_LOC_sel$LOC){
     formula_i <- update(formula_i, . ~ . + C(sample_previous, "contr.sum"))
   }
   
-  hours_sel_i <- which(d_mod_z_i$traptype == "p" & !d_mod_z_i$estimate)
+  hours_sel_i <- which(d_mod_z_i$traptype == "p" & d_mod_z_i$hours_data)
   
   if (length(hours_sel_i) == 0) hours_sel_i <- NULL
   
@@ -1795,7 +1798,7 @@ for (LOC_i in d_LOC_sel$LOC){
     formula_i <- update(formula_i, . ~ . + C(sample_previous, "contr.sum"))
   }
   
-  hours_sel_i <- which(d_mod_z_i$traptype == "p" & !d_mod_z_i$estimate)
+  hours_sel_i <- which(d_mod_z_i$traptype == "p" & d_mod_z_i$hours_dat)
   
   if (length(hours_sel_i) == 0) hours_sel_i <- NULL
   
@@ -1840,7 +1843,7 @@ for (LOC_i in d_LOC_sel$LOC){
     formula_i <- update(formula_i, . ~ . + C(sample_previous, "contr.sum"))
   }
   
-  hours_sel_i <- which(d_mod_z_i$traptype == "p" & !d_mod_z_i$estimate)
+  hours_sel_i <- which(d_mod_z_i$traptype == "p" & d_mod_z_i$hours_dat)
   
   if (length(hours_sel_i) == 0) hours_sel_i <- NULL
   
@@ -1874,11 +1877,11 @@ for (sp_i in d_sel$Name_std){
   
   d_mod_i <- d_moths %>%
     filter(Name_std == sp_i) |> 
-    group_by(LOC, visit_ID, A_id = A) %>%
+    group_by(LOC, Samplingdate, A_id = A) %>%
     summarise(abu = sum(individualCount),
               .groups = "drop") |> 
     full_join(d_mod_z |> select(-abu_tot),
-              by = join_by(LOC, visit_ID, A_id)) |>
+              by = join_by(LOC, Samplingdate, A_id)) |>
     mutate(abu = ifelse(is.na(abu), 0, abu))
   
   
@@ -1888,16 +1891,16 @@ for (sp_i in d_sel$Name_std){
                                      C(bulbtype, "contr.sum") +
                                      n_trap +
                                      C(sample_previous, "contr.sum") +
-                                     (1 | gr) +
+                                     (1 | spattemp_cluster) +
                                      (1 | LOC) +
                                      (1 | night_ID) +
                                      (1 | trap_ID_A),
                                    data_z = d_mod_i,
                                    scalings = filter(d_scalings, data == "full"),
                                    family = "zero_inflated_negbinomial",
-                                   hours_sel = which(d_mod_z$traptype == "p" & !d_mod_z$estimate),
+                                   hours_sel = which(d_mod_i$traptype == "p" & d_mod_i$hours_data),
                                    iter = n_iter,
-                                   seed = sp_nr_i)
+                                   seed = which(d_sel$Name_std == sp_i))
   
   out$d_coefs <- out$d_coefs |> 
     mutate(Name_std = sp_i)
@@ -2488,7 +2491,7 @@ d_table <- lapply(list(Overall__overall = l_abu_A$fit,
                                              C(traptype, "contr.sum") + 
                                              C(bulbtype, "contr.sum") + 
                                              n_trap + C(sample_previous, "contr.sum") + 
-                                             (1 | gr) + (1 | trap_ID) + 
+                                             (1 | spattemp_cluster) + (1 | trap_ID) + 
                                              (1 | night_ID) + (1 | trap_ID_A), 
                                            ". ~ A * height + ."))) |> 
   bind_rows(.id = "trait__traitvalue") |> 
@@ -2514,7 +2517,7 @@ d_table <- lapply(list(Overall__overall = l_abu_A$fit,
                                               C(traptype, "contr.sum") + 
                                               C(bulbtype, "contr.sum") + 
                                               n_trap + C(sample_previous, "contr.sum") + 
-                                              (1 | gr) + (1 | trap_ID) + 
+                                              (1 | spattemp_cluster) + (1 | trap_ID) + 
                                               (1 | night_ID) + (1 | trap_ID_A), 
                                             ". ~ A * height + ."))) |> 
               bind_rows(.id = "trait__traitvalue") |> 
@@ -2540,7 +2543,7 @@ d_table <- lapply(list(Overall__overall = l_abu_A$fit,
                                               C(traptype, "contr.sum") + 
                                               C(bulbtype, "contr.sum") + 
                                               n_trap + C(sample_previous, "contr.sum") + 
-                                              (1 | gr) + (1 | trap_ID) + 
+                                              (1 | spattemp_cluster) + (1 | trap_ID) + 
                                               (1 | night_ID) + (1 | trap_ID_A), 
                                             ". ~ A * height + ."))) |> 
               bind_rows(.id = "trait__traitvalue") |> 

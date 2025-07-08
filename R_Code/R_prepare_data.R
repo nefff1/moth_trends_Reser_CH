@@ -108,6 +108,16 @@ f_scale <- function(x, sub) {
     deframe()
 }
 
+f_iNEXT_prepare <- function(x){
+  x |> 
+    group_by(Name_std) |> 
+    summarise(individualCount = sum(individualCount),
+              .groups = "drop") |> 
+    select(individualCount) |> 
+    arrange(-individualCount) |> 
+    deframe()
+}
+
 # EDIT DATA --------------------------- ########################################
 ################################################################################.
 
@@ -326,7 +336,7 @@ d_SCcorr_tmp <-
   d_moths |>
   mutate(ID = paste(A, LOC, yday, sep = "___")) |>
   group_by(ID) |>
-  filter(sum(ADU) > 0) |>
+  filter(sum(individualCount) > 0) |>
   ungroup() |>
   (\(x) split(x, x$ID))() |>
   (\(x) lapply(x, f_iNEXT_prepare))() |>
@@ -579,10 +589,11 @@ d_moths %>%
             relationship = "many-to-one")
 
 d_SCcorr_tmp <-
-  d_reser_sub |>
+  d_moths |>
+  left_join(d_traits, by = "Name_std", relationship = "many-to-one") |>  
   mutate(ID = paste(A, LOC, yday, mass_cat, sep = "___")) |>
   group_by(ID) |>
-  filter(sum(ADU) > 0) |>
+  filter(sum(individualCount) > 0) |>
   ungroup() |>
   (\(x) split(x, x$ID))() |>
   (\(x) mclapply(x, f_iNEXT_prepare))() |>
@@ -644,10 +655,11 @@ d_mod_Tavg <-
             relationship = "many-to-one")
 
 d_SCcorr_tmp <-
-  d_reser_sub |>
+  d_moths |>
+  left_join(d_traits, by = "Name_std", relationship = "many-to-one") |> 
   mutate(ID = paste(A, LOC, yday, Tavg_mean_cat, sep = "___")) |>
   group_by(ID) |>
-  filter(sum(ADU) > 0) |>
+  filter(sum(individualCount) > 0) |>
   ungroup() |>
   (\(x) split(x, x$ID))() |>
   (\(x) mclapply(x, f_iNEXT_prepare))() |>
@@ -710,10 +722,11 @@ d_mod_hib <-
             relationship = "many-to-one")
 
 d_SCcorr_tmp <-
-  d_reser_sub |>
+  d_moths |>
+  left_join(d_traits, by = "Name_std", relationship = "many-to-one") |>  
   mutate(ID = paste(A, LOC, yday, overwintering_stage, sep = "___")) |>
   group_by(ID) |>
-  filter(sum(ADU) > 0) |>
+  filter(sum(individualCount) > 0) |>
   ungroup() |>
   (\(x) split(x, x$ID))() |>
   (\(x) mclapply(x, f_iNEXT_prepare))() |>
@@ -775,10 +788,11 @@ d_mod_spec <-
             by = "LOC", relationship = "many-to-one")
 
 d_SCcorr_tmp <-
-  d_reser_sub |>
+  d_moths |>
+  left_join(d_traits, by = "Name_std", relationship = "many-to-one") |>  
   mutate(ID = paste(A, LOC, yday, Spec, sep = "___")) |>
   group_by(ID) |>
-  filter(sum(ADU) > 0) |>
+  filter(sum(individualCount) > 0) |>
   ungroup() |>
   (\(x) split(x, x$ID))() |>
   (\(x) mclapply(x, f_iNEXT_prepare))() |>
