@@ -4,6 +4,4 @@
 .Ruserdata
 *.Rproj
 Output
-Data/d_weather.txt
-Data/d_traits.txt
 Data/GBIF

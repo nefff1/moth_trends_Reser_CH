@@ -1,4 +1,5 @@
-// generated with brms 2.17.0
+// generated with brms (Bürkner, P.-C., Gabry, J., Weber, S., Johnson, A., Modrák, M., Badr, H. S., Weber, F., Ben-Shachar, M. S., & Rabel, H. (2022). Bayesian Regression Models using “Stan”. R package version 2.17.0. [Computer software]. https://cran.r-project.org/web/packages/brms/brms.pdf)
+// adapted
 functions {
   /* zero-inflated negative binomial log-PDF of a single response
    * Args:

@@ -45,15 +45,17 @@ d_nullnights <- read.table("Data/d_nullnights.txt", header = T) |>
   mutate(Samplingdate = as.Date(Samplingdate))
 
 # temperature and precipitation data per night and LOC
-# based on data from https://www.meteoswiss.admin.ch
+# based on data from MeteoSwiss (https://www.meteoswiss.admin.ch)
 # variables 'TabsD' and 'RhiresD' on WGS84 grid
+# available from the repository
+# contains columns LOC (locality ID), Samplingdate, 
+# T_2day (average temperature over two days), P_2day (precipitation sum over two days)
 d_weather <- read.table("Data/d_weather.txt", header = T) |> 
   mutate(Samplingdate = as.Date(Samplingdate,
                                 format = "%Y-%m-%d"))
-# contains columns LOC (locality ID), Samplingdate, 
-# T_2day (average temperature over two days), P_2day (precipitation sum over two days)
 
-# trait group data available from Table S1 in manuscript
+
+# trait group data, available from this reposiroty
 d_traits <- read.table("Data/d_traits.txt", header = T, sep = "\t")
 names(d_traits) <- c("Name_std", "mass_cat", "Tavg_mean_cat", 
                      "Spec", "overwintering_stage")
