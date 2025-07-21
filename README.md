@@ -1,12 +1,12 @@
 # Analyses of moth trends across 50 years in dependence of elevation
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.14506883.svg)](https://doi.org/10.5281/zenodo.14506883)
+[![](https://zenodo.org/badge/DOI/10.5281/zenodo.14506883.svg)](https://doi.org/10.5281/zenodo.14506883)
 
 This repository contains codes and some data that were used in the analyses for the following manuscript:
 
 Neff F, Chittaro Y, Korner-Nievergelt F, Litsios G, Martínez-Núñez C, Rey E, Knop E. **Contrasting 50-year trends of moth communities depending on elevation and species traits**
 
-The analyses are based on a vast moth community dataset from Switzerland collected by Dr. Ladislaus Rezbanyai-Reser.
+In this study, 50-year trends in moth communities (abundance, richness, biomass) in dependence of elevation and functional traits (body size, temperature niche, food specialisation, hibernation stage) were investigated. The analyses are based on a vast moth community dataset from Switzerland collected by Dr. Ladislaus Rezbanyai-Reser between 1972 and 2021. They are part of the INSECT project.
 
 The following R files are included in the folder *R_Code*:
 
@@ -26,17 +26,61 @@ The following Stan code files are included in the folder *Stan_Code*. All code i
 
 Additional to species records data available from GBIF (<https://doi.org/10.15468/dl.gcagva>), the folder *Data* contains:
 
--   **d_samplings.txt**: Details on sampling site-year combinations used in the analyses: Spatio-temporal clusters, sampling pairs, different land-use proportions.
+-   **d_samplings.txt**: Details on sampling site-year combinations used in the analyses. Rows are unique site and year combinations. Columns are:
 
--   **d_nullnights.txt**: List of nights in which nothing was caught (missing from GBIF dataset).
+    -   LOC: Study site (ID)
 
--   **d_taxonomy.txt**: Moth species names according to the taxonomy used in the current analyses. Can be joint to GBIF data through the *taxonID* variable.
+    -   A: Year of sampling (integer)
 
--   **d_mass.txt**: Estimated species-level biomass used to estimate community-wide biomass. Based on wingspan data (Jonko 2002–2024, Fibiger 1990, Potocký et al. 2018, Ronkay et al. 2001) and a set of allometric relationships (Kinsella et al. 2020).
+    -   spattemp_cluster: Spatio-temporal clusters of sites in years (categorical)
 
--   **d_weather.txt**: Temperature and precipitation data for all 35,847 sampling nights. Calculated from gridded daily temperature and precipitation data from MeteoSwiss (<https://www.meteoswiss.admin.ch>; TabsD and RhiresD)
+    -   samplingpair: sampling pairs of simultaneously opterated sites (categorical)
 
--   **d_traits.txt**: Species-level trait data (body size, temperature niche, specialisation, overwintering stage). Body size, specialisation and overwintering stage data were collated and summarised from Cook et al. (2022), Fibiger (1990), Hacker & Müller (2006), Jonko et al. (2002–2024), Lepiforum e.V. (2002–2021), Mangels et al. (2017), Pearse & Altermatt (2013), Potocký et al. (2018), Ronkay et al. (2001), Steiner et al. (2014), Ziegler (2005–2024). Temperature niches were derived from GBIF distribution data (<https://doi.org/10.15468/dl.2mev52>, <https://doi.org/10.15468/dl.km9rkn>) and WorldlClim2 (Fick & Hijmans 2017).
+    -   height: elevation of study site (meters above sea level)
+
+-   **d_nullnights.txt**: List of nights in which nothing was caught (missing from the GBIF dataset). Rows are single sampling nights (unique combination of site and date). Columns are:
+
+    -   LOC: Study site (ID)
+
+    -   A: Year of sampling (integer)
+
+    -   Samplingdate: Date of sampling (Y-m-d)
+
+    -   active_hours: Number of hours for which a trap was active (real number)
+
+-   **d_taxonomy.txt**: Moth species names according to the taxonomy used in the current analyses. Can be joint to GBIF data through the *taxonID* variable. Each row is a species. Columns are:
+
+    -   taxonID: taxonID as reported in the GBIF data
+
+    -   Name_std: Species name used in the analyses
+
+-   **d_mass.txt**: Estimated species-level biomass used to estimate community-wide biomass. Based on wingspan data (Jonko 2002–2024, Fibiger 1990, Potocký et al. 2018, Ronkay et al. 2001) and a set of allometric relationships (Kinsella et al. 2020). Each row is a species. Columns are:
+
+    -   Name_std: Species name used in the analyses
+
+    -   mass: estimated mass (real number; grams)
+
+-   **d_weather.txt**: Temperature and precipitation data for all 35,847 sampling nights. Calculated from gridded daily temperature and precipitation data from MeteoSwiss ([https://www.meteoswiss.admin.ch](https://www.meteoswiss.admin.ch/); TabsD and RhiresD; licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)). Rows are sampling nights (unique combination of site and date). Columns are:
+
+    -   LOC: Study site (ID)
+
+    -   Samplingdate: Date of sampling (Y-m-d)
+
+    -   T_2day: Averaged mean daily temperature of the two days that include the sampling night (real number; degree Celsius)
+
+    -   P_2day: Summed precipitation of the two days that include the sampling night (real number; mm)
+
+-   **d_traits.txt**: Species-level trait data (body size, temperature niche, specialisation, overwintering stage). Body size, specialisation and overwintering stage data were collated and summarised from Cook et al. (2022), Fibiger (1990), Hacker & Müller (2006), Jonko et al. (2002–2024), Lepiforum e.V. (2002–2021), Mangels et al. (2017), Pearse & Altermatt (2013), Potocký et al. (2018), Ronkay et al. (2001), Steiner et al. (2014), Ziegler (2005–2024). Temperature niches were derived from GBIF distribution data (<https://doi.org/10.15468/dl.2mev52>, <https://doi.org/10.15468/dl.km9rkn>) and WorldlClim2 (Fick & Hijmans 2017). Each row is a species. Columns are:
+
+    -   Species: Species name used in the analyses
+
+    -   Body size: body size class (categorial; small, medium, large)
+
+    -   Temp. niche: temperature niche class (categorical; cold, intermediate, warm)
+
+    -   Specialisation: food specialisation class (categorical; monophagous, oligophagous, polyphagous)
+
+    -   Overw. stage: overwintering stage (categorical; egg, egg/larva, larva, larva/pupa, pupa, adult)
 
 **References**
 
