@@ -16,11 +16,19 @@ The following R files are included in the folder *R_Code*:
 
 The following Stan code files are included in the folder *Stan_Code*. All code is adapted from models built through 'brms' (Bürkner et al. 2022):
 
+-   **Stan_hg_spline_s1_r1.stan**: Stan model code of a regression model with 1 smoothing term, 1 random term and a hurdle gamma distribution.
+
 -   **Stan_hg_spline_s1_r4.stan**: Stan model code of a regression model with 1 smoothing term, 4 random terms and a hurdle gamma distribution.
+
+-   **Stan_hg_spline_s1p1_r1.stan**: Stan model code of a regression model with 1 smoothing term, an additional smoothing term with restricted frame (hours active), 1 random term and a hurdle gamma distribution.
 
 -   **Stan_hg_spline_s1p1_r4.stan**: Stan model code of a regression model with 1 smoothing term, an additional smoothing term with restricted frame (hours active), 4 random terms and a hurdle gamma distribution.
 
+-   **Stan_nb_spline_s1_r1.stan**: Stan model code of a regression model with 1 smoothing term, 1 random term and a zero-inflated negative binomial distribution.
+
 -   **Stan_nb_spline_s1_r4.stan**: Stan model code of a regression model with 1 smoothing term, 4 random terms and a zero-inflated negative binomial distribution.
+
+-   **Stan_nb_spline_s1p1_r1.stan**: Stan model code of a regression model with 1 smoothing term, an additional smoothing term with restricted frame (hours active), 1 random term and a zero-inflated negative binomial distribution.
 
 -   **Stan_nb_spline_s1p1_r4.stan**: Stan model code of a regression model with 1 smoothing term, an additional smoothing term with restricted frame (hours active), 4 random terms and a zero-inflated negative binomial distribution.
 
@@ -111,3 +119,15 @@ Ronkay, L., Yela Garcia, J. L., & Hreblay, M. (2001). *Noctuidae Europaeae. Volu
 Steiner, A., Ratzel, U., Top-Jensen, M., & Fibiger, M. (Eds.). (2014). *Die Nachtfalter Deutschlands: Ein Feldführer*. BugBook Publishing.
 
 Ziegler, H. (2005–2024). *Butterflies & Moths of Palaearctic Regions*. <https://euroleps.ch>
+
+***License***
+
+*The research data in the folder 'Data' is licensed under [CC BY 4.0](https://www.gnu.org/licenses/old-licenses/gpl-2.0-standalone.html), the code in the folders 'R_Code' and 'Stan_Code' is licensed under [GPL v2.0](https://www.gnu.org/licenses/old-licenses/gpl-2.0-standalone.html).*
+
+*'brms': Bayesian Regression Models using "Stan". R package version 2.17.0 Copyright (C) 2022 Bürkner, P.-C., Gabry, J., Weber, S., Johnson, A., Modrák, M., Badr, H.S., et al. Stan model code was created with the function 'make_stancode' and adapted to the specific needs of the present analyses.*
+
+*This program is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License v2 as published by the Free Software Foundation.*
+
+*This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.*
+
+*You should have received a copy of the GNU General Public License along with this program; if not, see \<<https://www.gnu.org/licenses/>\>.*

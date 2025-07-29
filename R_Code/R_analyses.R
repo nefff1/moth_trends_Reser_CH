@@ -1,17 +1,25 @@
 # SETUP ------------------------------- ########################################
 ################################################################################.
 
+# We used R version 4.2.0 (R Core Team 2022)
+
 # ... packages #################################################################
 ################################################################################.
 
-library(tidyverse); theme_set(theme_classic())
-library(rstan); options(mc.cores = 4)
-library(brms)
-library(bayestestR)
-library(mgcv)
-library(cowplot)
-library(ggh4x)
-library(openxlsx)
+library(tidyverse); theme_set(theme_classic()) # tidyverse version 2.0.0
+library(rstan); options(mc.cores = 4) # rstan version 2.26.22 and Stan version 2.26.1
+library(brms) # brms version 2.17.0
+library(bayestestR) # bayestestR version 0.13.1
+library(mgcv) # mgcv version 1.9-1
+library(cowplot) # cowplot version 1.1.1
+library(ggh4x) # ggh4x version 0.2.8
+library(openxlsx) # openxlsx version 4.2.5.2
+library(raster) # raster version 3.6-26
+library(giscoR) # giscoR version 0.6.0
+library(sf) # sf version 1.0-15
+library(ggspatial) # ggspatial version 1.1.9
+
+select <- dplyr::select
 
 # ... set global parameters ####################################################
 ################################################################################.
@@ -1235,38 +1243,38 @@ l_abu_A_spec_m <- f_analysis_A_height(formula = abu_tot ~
                                       hours_sel = which(d_mod_spec_z$traptype[d_mod_spec_z$Spec == "Monophagous"] == "p" &
                                                           d_mod_spec_z$hours_data[d_mod_spec_z$Spec == "Monophagous"]),
                                       iter = n_iter, seed = 346)
-# l_abu_A_spec_o <- f_analysis_A_height(formula = abu_tot ~
-s(yday) + P_2day + T_2day +
-  C(traptype, "contr.sum") +
-  C(bulbtype, "contr.sum") +
-  n_trap +
-  C(sample_previous, "contr.sum") +
-  (1 | spattemp_cluster) +
-  (1 | LOC) +
-  (1 | night_ID) +
-  (1 | trap_ID_A),
-data_z = d_mod_spec_z %>% filter(Spec == "Oligophagous"),
-scalings = filter(d_scalings, data == "full"),
-family = "zero_inflated_negbinomial",
-hours_sel = which(d_mod_spec_z$traptype[d_mod_spec_z$Spec == "Oligophagous"] == "p" &
-                    d_mod_spec_z$hours_data[d_mod_spec_z$Spec == "Oligophagous"]),
-iter = n_iter, seed = 665)
-# l_abu_A_spec_p <- f_analysis_A_height(formula = abu_tot ~
-s(yday) + P_2day + T_2day +
-  C(traptype, "contr.sum") +
-  C(bulbtype, "contr.sum") +
-  n_trap +
-  C(sample_previous, "contr.sum") +
-  (1 | spattemp_cluster) +
-  (1 | LOC) +
-  (1 | night_ID) +
-  (1 | trap_ID_A),
-data_z = d_mod_spec_z %>% filter(Spec == "Polyphagous"),
-scalings = filter(d_scalings, data == "full"),
-family = "zero_inflated_negbinomial",
-hours_sel = which(d_mod_spec_z$traptype[d_mod_spec_z$Spec == "Polyphagous"] == "p" &
-                    d_mod_spec_z$hours_data[d_mod_spec_z$Spec == "Polyphagous"]),
-iter = n_iter, seed = 863)
+l_abu_A_spec_o <- f_analysis_A_height(formula = abu_tot ~
+                                        s(yday) + P_2day + T_2day +
+                                        C(traptype, "contr.sum") +
+                                        C(bulbtype, "contr.sum") +
+                                        n_trap +
+                                        C(sample_previous, "contr.sum") +
+                                        (1 | spattemp_cluster) +
+                                        (1 | LOC) +
+                                        (1 | night_ID) +
+                                        (1 | trap_ID_A),
+                                      data_z = d_mod_spec_z %>% filter(Spec == "Oligophagous"),
+                                      scalings = filter(d_scalings, data == "full"),
+                                      family = "zero_inflated_negbinomial",
+                                      hours_sel = which(d_mod_spec_z$traptype[d_mod_spec_z$Spec == "Oligophagous"] == "p" &
+                                                          d_mod_spec_z$hours_data[d_mod_spec_z$Spec == "Oligophagous"]),
+                                      iter = n_iter, seed = 665)
+l_abu_A_spec_p <- f_analysis_A_height(formula = abu_tot ~
+                                        s(yday) + P_2day + T_2day +
+                                        C(traptype, "contr.sum") +
+                                        C(bulbtype, "contr.sum") +
+                                        n_trap +
+                                        C(sample_previous, "contr.sum") +
+                                        (1 | spattemp_cluster) +
+                                        (1 | LOC) +
+                                        (1 | night_ID) +
+                                        (1 | trap_ID_A),
+                                      data_z = d_mod_spec_z %>% filter(Spec == "Polyphagous"),
+                                      scalings = filter(d_scalings, data == "full"),
+                                      family = "zero_inflated_negbinomial",
+                                      hours_sel = which(d_mod_spec_z$traptype[d_mod_spec_z$Spec == "Polyphagous"] == "p" &
+                                                          d_mod_spec_z$hours_data[d_mod_spec_z$Spec == "Polyphagous"]),
+                                      iter = n_iter, seed = 863)
 
 # richness ---------------------------------------------------------------------.
 l_ric_A_spec_m <- f_analysis_A_height(formula = SCcorr_ric ~
@@ -2665,6 +2673,159 @@ d_table |>
   select(var, everything()) |> 
   write_excel_csv2("Output/Tables/Table1.csv")
 
+# ... Figure 1 #################################################################
+################################################################################.
+
+# Europe map -------------------------------------------------------------------.
+sf_europe <- gisco_get_countries(region = "Europe")
+
+r_elevEurope <- raster("Data/Elevation_models/dtm_elev.lowestmode_meritdem_m_100m_0..0cm_2000..2018_eumap_epsg3035_v1.01.tif")
+r_elevEurope <- aggregate(r_elevEurope, fact = 100, fu = mean)
+r_elevEurope <- projectRaster(r_elevEurope, 
+                              crs = CRS("+proj=longlat +datum=WGS84 +no_defs"))
+r_elevEurope <- mask(r_elevEurope, sf_europe)
+# plot(r_elevEurope)
+
+d_elevEurope <- as.data.frame(r_elevEurope, xy = TRUE)
+names(d_elevEurope) <- c("x", "y", "elev")
+d_elevEurope <- d_elevEurope |> 
+  filter(!is.na(elev))
+
+# to cut off overseas areas
+cut_pol <-  st_sfc(st_polygon(list(cbind(c(-5, 40, 45, -40, -5),
+                                         c(25, 30, 75, 65, 25)))),
+                   crs = 4326) %>% 
+  st_transform(crs = st_crs(sf_europe)) # harmonize coordinate system
+
+p_europe <-
+  sf_europe %>%
+  ggplot() +
+  geom_raster(data = d_elevEurope, aes(x = x, y = y, fill = elev)) +
+  geom_sf(col = "grey5", fill = NA, size = .1) +
+  geom_sf(data = sf_europe %>% filter(CNTR_ID == "CH"), fill = NA, 
+          col = "red3", size = .5) +
+  coord_sf(xlim = c(-9, 20),
+           ylim = c(37, 60)) +
+  scale_fill_gradient(low = "grey80", high = "grey10") +
+  theme(plot.margin = ggplot2::margin(10, 10, 10, 10, "pt"),
+        panel.border = element_rect(colour = "black", fill = NA),
+        axis.text = element_blank(),
+        axis.line = element_blank(),
+        axis.ticks = element_blank(),
+        axis.title = element_blank(),
+        plot.background = element_rect(fill = NA, colour = NA),
+        panel.background = element_rect(fill = NA, colour = NA),
+        legend.position = "none") 
+
+# maps Switzerland -------------------------------------------------------------.
+
+sf_ch_border <- gisco_get_countries(country = "CH", resolution = "01") |> 
+  st_transform(crs = 2056)
+
+# elevation model of Switzerland, available from Federal Office of Topography swisstopo
+# https://www.swisstopo.admin.ch/en/height-model-dhm25
+r_relief <- raster("Data/Elevation_models/ASCII_GRID_1part/dhm25_grid_raster.asc")
+r_relief <- aggregate(r_relief, fact = 10, fu = mean)
+crs(r_relief) <- CRS("+init=epsg:21781")
+r_relief <- projectRaster(r_relief, crs = CRS("+init=epsg:2056"))
+# and again back to data.frame
+d_relief <-
+  r_relief %>%
+  # hide relief outside of Switzerland by masking with country borders
+  mask(sf_ch_border) %>%
+  # as("SpatialPixelsDataFrame") %>%
+  as.data.frame(xy = T) %>%
+  rename(value = dhm25_grid_raster) %>%
+  filter(!is.na(value))
+rm(r_relief)
+
+scale_bar <- data.frame(int5 = 2017,  # matches only this facet
+                        geometry = st_sfc(st_linestring(rbind(c(-80, 34), c(-79.5, 34))))) |> 
+  st_as_sf(crs = st_crs(sf_ch_border))
+
+sf_samplings <-
+  d_samplings %>%
+  mutate(int5 = floor((A - 2) / 5) * 5 + 2) %>%
+  select(int5, LOC) %>%
+  distinct() %>%
+  left_join(d_moths_raw |> 
+              # the following are the approximate LOC coordinates
+              # the original figure contains the more precise coordinates
+              select(LOC = locality, decimalLatitude, decimalLongitude) |> 
+              distinct(),
+            by = "LOC") |> 
+  st_as_sf(coords = c("decimalLongitude", "decimalLatitude"),
+           crs = 4326) |> 
+  st_transform(crs = 2056)
+
+l_plots_maps_CH <- list()
+for (int5_i in sort(unique(sf_samplings$int5))){
+  l_plots_maps_CH[[as.character(int5_i)]] <- sf_samplings |> 
+    filter(int5 == int5_i) |> 
+    ggplot() +
+    geom_sf(data = sf_ch_border) +
+    geom_raster(data = d_relief, inherit.aes = FALSE,
+                aes(x = x, y = y, fill = value)) +
+    geom_sf(alpha = .5, col = "red3") +
+    scale_fill_gradient(low = "grey80", high = "grey10") +
+    facet_wrap(~ int5,
+               labeller = as_labeller(c("1972" = "1972–1976", "1977" = "1977–1981",
+                                        "1982" = "1982–1986", "1987" = "1987–1991",
+                                        "1992" = "1992–1996", "1997" = "1997–2001",
+                                        "2002" = "2002–2006", "2007" = "2007–2011",
+                                        "2012" = "2012–2016", "2017" = "2017–2021"))) +
+    theme(axis.text = element_blank(),
+          axis.line = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title = element_blank(),
+          legend.position = "none",
+          plot.margin = ggplot2::margin(0, 0, 0, 0, "pt"),
+          strip.text = element_text(size = v_textsize["axis.title"]))
+  
+  if (int5_i == 1972){
+    l_plots_maps_CH[[as.character(int5_i)]] <- l_plots_maps_CH[[as.character(int5_i)]] +
+      annotation_scale(text_cex = ggplot2:::.pt/v_textsize["additional.text"],
+                       location = "tl", pad_y = unit(0.1, "cm"))
+  }
+  
+  
+}
+
+p_maps_CH <-plot_grid(plotlist = l_plots_maps_CH, nrow = 2)
+
+
+# time versus elevation sampling -----------------------------------------------.
+
+p_elev_A <- d_samplings %>%
+  select(LOC, A) %>%
+  distinct() |> 
+  left_join(d_sites %>%
+              select(LOC, height) %>%
+              distinct(), 
+            by = "LOC") %>%
+  ggplot(aes(x = A, y = height)) +
+  geom_point(colour = "red3", alpha = .5) +
+  labs(x = "Year", y = "Elevation") +
+  theme(plot.margin = ggplot2::margin(10, 10, 10, 10, "pt"),
+        axis.title = element_text(size = v_textsize["axis.title"]),
+        axis.text = element_text(size = v_textsize["axis.text"]))
+
+# combined plot ----------------------------------------------------------------.
+
+p_comb <- plot_grid(
+  plot_grid(
+    p_europe, p_elev_A, 
+    nrow = 1, rel_widths = c(1, 3.5),
+    labels = c("(a)", "(b)"), label_size = v_textsize["axis.title"]
+  ),
+  p_maps_CH,
+  ncol = 1, rel_heights = c(1, 1.5),
+  labels = c("", "(c)"), label_size = v_textsize["axis.title"],
+  label_y = 1.072
+)
+
+ggsave(p_comb, file = "Output/Figures/Spatiotemporal_coverage2.pdf",
+       height = 100, width = 180, units = "mm", dpi = 600)
 
 # ... Figure 2 #################################################################
 ################################################################################.

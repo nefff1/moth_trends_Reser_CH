@@ -1,11 +1,13 @@
 # SETUP ------------------------------- ########################################
 ################################################################################.
 
+# We used R version 4.2.0 (R Core Team 2022)
+
 # ... packages #################################################################
 ################################################################################.
 
-library(tidyverse); theme_set(theme_classic())
-library(iNEXT)
+library(tidyverse); theme_set(theme_classic()) # tidyverse version 2.0.0
+library(iNEXT) # iNext version 3.0.1
 library(parallel)
 
 # ... read data ################################################################
@@ -13,8 +15,8 @@ library(parallel)
 
 # moth records data, available from GBIF (downloaded as Darwin Core Archive)
 # https://doi.org/10.15468/dl.gcagva
-d_moths <- data.table::fread("Data/GBIF/occurrence.txt", header = T)
-d_moths <- d_moths |> 
+d_moths_raw <- data.table::fread("Data/GBIF/occurrence.txt", header = T)
+d_moths_raw <- d_moths_raw |> 
   # correct few details that differ from the dataset used for the analyses
   mutate(locality = ifelse(gbifID %in% c(3002611147, 3003135068, 3003121096),
                            "Meride, Fontana", locality),
@@ -29,7 +31,9 @@ d_moths <- d_moths |>
                                    year == 1979, "LF /80 MLL /1979:6.5.-24.11 /1 /80MLL /1979_6 /NA",
                                  samplingEffort),
          individualCount = ifelse(gbifID %in% c(3003091312, 3002794229),
-                                  1, individualCount)) |> 
+                                  1, individualCount))
+
+d_moths <- d_moths_raw |> 
   select(A = year, M = month, J = day, active_hours = sampleSizeValue,
          DETAILS = samplingEffort, LOC = locality, taxonID, individualCount)
 
